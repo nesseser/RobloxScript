@@ -1,0 +1,4078 @@
+--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LogService = game:GetService("LogService")
+local TextChatService = game:GetService("TextChatService")
+local HttpService = game:GetService("HttpService")
+
+------------------------------------------------------------------
+-- AYARLAR (burayi doldur)
+------------------------------------------------------------------
+local PANEL_NAME = "HUNTER-PANEL"
+local BG_IMAGE_ID = "" -- kedi anime kizi gorselinin Roblox ID'si (sadece rakam)
+local SOUND_ID = ""    -- uyari sesinin Roblox ID'si (bos = varsayilan bip)
+local DEFAULT_THEME = 7 -- 7 = Sakura (Anime)
+local ALLOWED_IDS = {}  -- bos = herkes. Sadece sen: {123456789}
+
+local player = Players.LocalPlayer
+if #ALLOWED_IDS > 0 and not table.find(ALLOWED_IDS, player.UserId) then return end
+
+local camera = workspace.CurrentCamera
+local startTime = os.clock()
+
+------------------------------------------------------------------
+-- TEMALAR
+------------------------------------------------------------------
+local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+local THEMES = {
+	{ name = "Gece", bg = rgb(16,16,22), panel = rgb(23,23,31), card = rgb(32,32,44), stroke = rgb(58,58,78),
+	  accent = rgb(99,102,241), text = rgb(236,238,245), sub = rgb(150,155,178), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Okyanus", bg = rgb(10,20,28), panel = rgb(14,30,40), card = rgb(20,42,56), stroke = rgb(40,80,100),
+	  accent = rgb(34,211,238), text = rgb(230,248,252), sub = rgb(130,170,185), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Orman", bg = rgb(14,22,17), panel = rgb(19,32,24), card = rgb(27,46,34), stroke = rgb(50,88,62),
+	  accent = rgb(74,222,128), text = rgb(232,248,238), sub = rgb(140,175,152), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Kan", bg = rgb(22,12,14), panel = rgb(32,17,20), card = rgb(46,24,28), stroke = rgb(88,44,50),
+	  accent = rgb(239,68,68), text = rgb(250,235,236), sub = rgb(185,140,145), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Mor Neon", bg = rgb(14,10,24), panel = rgb(22,15,38), card = rgb(34,24,58), stroke = rgb(78,58,128),
+	  accent = rgb(192,132,252), text = rgb(244,236,255), sub = rgb(170,150,205), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Açık", bg = rgb(240,241,246), panel = rgb(228,230,240), card = rgb(255,255,255), stroke = rgb(200,204,220),
+	  accent = rgb(79,70,229), text = rgb(30,32,45), sub = rgb(110,115,140), alpha = 0, alphaBg = 0, deco = "" },
+	{ name = "Sakura (Anime)", bg = rgb(40,18,34), panel = rgb(58,26,48), card = rgb(78,36,64), stroke = rgb(150,80,125),
+	  accent = rgb(255,126,185), text = rgb(255,240,248), sub = rgb(230,170,205), alpha = 0.35, alphaBg = 0.2,
+	  deco = "  ✿ ◕‿◕ ♡" },
+}
+
+local T = {
+	ok = rgb(74,222,128), warn = rgb(250,204,21), bad = rgb(248,113,113),
+	info = rgb(96,165,250), purple = rgb(192,132,252), orange = rgb(251,146,60),
+	alpha = 0, alphaBg = 0, deco = "",
+}
+for k, v in pairs(THEMES[DEFAULT_THEME]) do
+	if k ~= "name" then T[k] = v end
+end
+
+local THEME_KEYS = { "bg", "panel", "card", "stroke", "accent", "text", "sub" }
+local COLOR_PROPS = { BackgroundColor3 = true, TextColor3 = true, Color = true, ScrollBarImageColor3 = true }
+local bound = {}
+
+local function colorKey(c)
+	for _, k in ipairs(THEME_KEYS) do
+		if T[k] == c then return k end
+	end
+end
+local function alphaFor(key)
+	if key == "bg" then return T.alphaBg end
+	if key == "panel" or key == "card" then return T.alpha end
+	return nil
+end
+
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	local noBind = props.NoBind
+	for k, v in pairs(props) do
+		if k ~= "NoBind" then
+			o[k] = v
+			if not noBind and COLOR_PROPS[k] and typeof(v) == "Color3" then
+				local key = colorKey(v)
+				if key then
+					table.insert(bound, { o, k, key })
+					if k == "BackgroundColor3" and props.BackgroundTransparency == nil then
+						local a = alphaFor(key)
+						if a and a > 0 then o.BackgroundTransparency = a end
+					end
+				end
+			end
+		end
+	end
+	if parent then o.Parent = parent end
+	return o
+end
+local function round(o, r) new("UICorner", { CornerRadius = UDim.new(0, math.min(r or 8, 3)) }, o) end
+local function stroke(o, c, t)
+	return new("UIStroke", { Color = c or T.stroke, Thickness = t or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
+end
+local function tween(o, time, props)
+	TweenService:Create(o, TweenInfo.new(time or 0.15, Enum.EasingStyle.Quad), props):Play()
+end
+local function fmt(n) return string.format("%g", n) end
+
+------------------------------------------------------------------
+-- DURUM
+------------------------------------------------------------------
+local S = {
+	speedOn = false, speed = 50,
+	jumpOn = false, jump = 100,
+	gravityOn = false, gravity = 100,
+	flyOn = false, flySpeed = 80,
+	noclip = false, noclipVert = 50,
+	antiVoid = true, voidY = -400,
+	infJump = false, clickTP = false,
+	respawnAtDeath = true,
+	fovOn = false, fov = 70,
+	fullbright = false,
+	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 600,
+	entOn = true, entHighlight = true,
+	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,knob,hinge,doorway,jamb,trim,panel",
+	entMax = 600, doorMax = 300, entDoor = true, entDoorHl = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
+	entDoors = "door,kapi", entHides = "wardrobe,closet,locker,cabinet,dolap,hide,bed", entItems = "key,coin,item,pickup,chest",
+	entDanger = "rush,ambush,seek,figure,screech,eyes,halt,jeff,boss,monster,enemy,zombie,killer",
+	hbViz = false,
+	logClient = false,
+	soundOn = true, soundVol = 0.6,
+	bgId = BG_IMAGE_ID, bgTrans = 0.35,
+	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
+	antiSlip = false, noTouch = true,
+	ambientOn = false, ambR = 100, ambG = 100, ambB = 100, noShake = false,
+	thirdPerson = false, tpX = 0, tpY = 1, tpZ = 10, tpWall = true,
+	hideSpotTrans = false, hideSpotAlpha = 0.7,
+	fxOff = false, fxNames = "jumpscare,vignette,glitch,timothy,firedamp,screech",
+	notifyEnt = true, entMute = "", notifyItems = false, entChat = false, notifyStyle = "Standart", keepNotif = false,
+	espObj = false, objWords = "lever,breaker,fuse,generator,objective",
+	espCur = false, curWords = "gold,coin,currency",
+	espLad = false, ladWords = "ladder", espMisc = false, miscWords = "",
+	colIdx = { entity = 1, door = 5, hide = 4, chest = 6, item = 3, currency = 3, ladder = 2, objective = 7, misc = 8, player = 1 },
+	promptMult = 3, promptClip = false, doorReach = false, enableJump = false, noAccel = false,
+	autoTpDoor = false, autoCloset = false, closetDist = 40, spectate = false,
+	nearAuto = false, nearItems = true, nearDoors = false, nearInterval = 0.5,
+	lootWords = "pick,take,loot,collect,search,drawer,chest,crate,safe,item,key,coin,grab,cekmece,sandik,topla,cabinet,dresser,desk",
+	nearSkip = "hide,enter,exit,sit,seat,drive,ride,leave,lever,switch,button,sleep,bed",
+	rQuick = true, rItems = true, rDoors = true, rReturn = true, rRange = 40, rDelay = 0.1,
+	fakeWords = "fake,decoy,false,sahte,mimic,illusion,dummy",
+	coinNames = "coin,gold,currency,cash,money", coinDelay = 0.15, coinRange = 600, coinReturn = true, coinRun = false,
+	winNames = "finish,goal,win,victory,winner,endzone,flag", cpNames = "checkpoint,stage,cp", winDelay = 0.4,
+	autoWin = false, autoWinEvery = 5,
+	autoHeal = false, healInterval = 0.1,
+	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
+	lookGuard = false, hideLook = false, lookNames = "eyes,lookman", lookRange = 250,
+	dodge = false, dodgeTime = 1, dodgeMin = 12, dodgeFar = 600, dodgeStay = 1.2, dodgeBack = 35,
+	noEntDmg = true, flee = false, fleeDist = 25,
+	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
+	staminaNames = "stamina,energy,sprint,mana,oxygen,breath,fuel,battery,flashlight",
+	infFood = false, foodNames = "food,hunger,hungry,satiety,thirst,water,drink,eat,starv,yemek,aclik,susuzluk,tokluk",
+	autoCollect = false, collectMode = "Yürü", collectSpeed = 60, collectDelay = 0.4, collectMax = 600,
+	killNames = "kill,lava,death,damage,hurt,trap,spike,acid,laser,fire,poison,void,zap,electric,hitbox,hurtbox,attack,claw,bite,slash",
+	charNoTouch = false,
+	godMode = false, clockOn = false, clockTime = 14, noFog = false, crosshair = false,
+	zoomOn = false, zoom = 400, showStats = false,
+}
+local DEFAULT_GRAVITY = workspace.Gravity
+local DEFAULT_FOV = camera.FieldOfView
+
+local function getChar() return player.Character end
+local function getHum()
+	local c = getChar()
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function getRoot()
+	local c = getChar()
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local X = { cur = 0, baseWalk = 16, speeding = false, themeIndex = DEFAULT_THEME,
+	clock0 = Lighting.ClockTime, fog0 = Lighting.FogEnd, zoom0 = player.CameraMaxZoomDistance, fps = 60 } -- ortak durum + sonradan baglanan fonksiyonlar
+-- tek DescendantAdded baglantisi + zaman butceli kuyruk: oda gecislerinde yuzlerce parca eklenirken takilma olmasin
+do
+	local handlers = {}
+	local q, qt, head, tail = {}, {}, 1, 0
+	function X.onAdded(fn) handlers[#handlers + 1] = fn end
+	workspace.DescendantAdded:Connect(function(d)
+		tail += 1
+		q[tail], qt[tail] = d, os.clock()
+	end)
+	RunService.Heartbeat:Connect(function()
+		local t0 = os.clock()
+		while head <= tail and os.clock() - t0 < 0.0015 do
+			if t0 - qt[head] < 0.2 then break end -- Humanoid vb. icerik gelsin diye 0.2 sn bekle
+			local d = q[head]
+			q[head], qt[head] = nil, nil
+			head += 1
+			if d.Parent then
+				for _, fn in ipairs(handlers) do pcall(fn, d) end
+			end
+		end
+		if head > tail then head, tail = 1, 0 end
+	end)
+end
+local lastDeathCF, pendingRevive, safePos
+local function teleportTo(cf)
+	local root = getRoot()
+	if not root then return end
+	root.CFrame = cf
+	X.lastPos = nil
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+------------------------------------------------------------------
+-- ANA PENCERE
+------------------------------------------------------------------
+local gui = new("ScreenGui", {
+	Name = "HunterPanel", ResetOnSpawn = false, DisplayOrder = 999, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, player:WaitForChild("PlayerGui"))
+
+local main = new("Frame", {
+	Size = UDim2.fromOffset(640, 420), Position = UDim2.new(0.5, -320, 0.5, -210),
+	BackgroundColor3 = T.bg, BorderSizePixel = 0, Active = true,
+}, gui)
+round(main, 12)
+stroke(main)
+local uiScale = new("UIScale", { Scale = UserInputService.TouchEnabled and 0.75 or 1 }, main)
+
+-- arka plan gorseli (anime vb.) en altta durur
+local bgImage = new("ImageLabel", {
+	Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Crop,
+	ImageTransparency = S.bgTrans, Visible = false, ZIndex = 0, NoBind = true,
+}, main)
+round(bgImage, 12)
+
+local titleBar = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = T.panel, BorderSizePixel = 0 }, main)
+round(titleBar, 12)
+new("Frame", { Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 1, -12), BackgroundColor3 = T.panel, BorderSizePixel = 0 }, titleBar)
+local titleLbl = new("TextLabel", {
+	Size = UDim2.new(1, -120, 1, 0), Position = UDim2.fromOffset(14, 0), BackgroundTransparency = 1, RichText = true,
+	TextColor3 = T.text, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+}, titleBar)
+local function updateTitle()
+	titleLbl.Text = "⚡  " .. PANEL_NAME .. "  <font color='#" .. T.sub:ToHex() .. "' size='11'>•  K gizle/göster</font>"
+		.. (T.deco ~= "" and ("<font color='#" .. T.accent:ToHex() .. "'>" .. T.deco .. "</font>") or "")
+end
+updateTitle()
+
+local function titleBtn(text, xOff)
+	local b = new("TextButton", {
+		Size = UDim2.fromOffset(28, 24), Position = UDim2.new(1, xOff, 0.5, -12),
+		BackgroundColor3 = T.card, Text = text, TextColor3 = T.sub, Font = Enum.Font.GothamBold,
+		TextSize = 14, AutoButtonColor = false,
+	}, titleBar)
+	round(b, 6)
+	b.MouseEnter:Connect(function() tween(b, 0.1, { BackgroundColor3 = T.stroke }) end)
+	b.MouseLeave:Connect(function() tween(b, 0.1, { BackgroundColor3 = T.card }) end)
+	return b
+end
+local minBtn = titleBtn("–", -70)
+local closeBtn = titleBtn("✕", -36)
+
+local body = new("Frame", { Size = UDim2.new(1, 0, 1, -40), Position = UDim2.fromOffset(0, 40), BackgroundTransparency = 1 }, main)
+local sidebar = new("Frame", { Size = UDim2.new(0, 150, 1, -8), Position = UDim2.fromOffset(8, 0), BackgroundColor3 = T.panel, BorderSizePixel = 0 }, body)
+round(sidebar, 10)
+new("UIListLayout", { Padding = UDim.new(0, 4) }, sidebar)
+new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, sidebar)
+local content = new("Frame", { Size = UDim2.new(1, -176, 1, -8), Position = UDim2.fromOffset(166, 0), BackgroundTransparency = 1 }, body)
+
+do -- surukleme
+	local dragging, dragStart, startPos
+	titleBar.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, i.Position, main.Position
+			i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - dragStart
+			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	body.Visible = not minimized
+	tween(main, 0.2, { Size = UDim2.fromOffset(640, minimized and 40 or 420) })
+end)
+closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
+
+local floatBtn = new("TextButton", {
+	Size = UDim2.fromOffset(40, 40), Position = UDim2.new(0, 10, 0.5, -20), BackgroundColor3 = T.accent,
+	Text = "⚡", TextSize = 20, TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, AutoButtonColor = true,
+}, gui)
+round(floatBtn, 20)
+floatBtn.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
+
+-- panel aciksa fare serbest kalsin (birinci sahis / kilitli kamerada bile)
+local modalBtn = new("TextButton", {
+	Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, Text = "", Modal = true, NoBind = true,
+}, gui)
+-- panel aciksa imlec noktasi (birinci sahiste sistem imleci gorunmez)
+-- ayri, en ustte duran ScreenGui (oyunun UI'lari ustune cikmasin)
+local cursorGui = new("ScreenGui", {
+	Name = "HunterCursor", ResetOnSpawn = false, DisplayOrder = 2147483647, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, player:WaitForChild("PlayerGui"))
+local cursorDot = new("Frame", {
+	Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.fromRGB(255, 60, 60),
+	BorderSizePixel = 0, Visible = false, NoBind = true,
+}, cursorGui)
+new("UICorner", { CornerRadius = UDim.new(1, 0) }, cursorDot)
+new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2, NoBind = true }, cursorDot)
+RunService.RenderStepped:Connect(function()
+	cursorDot.Visible = main.Visible
+	if main.Visible then
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
+		local p = UserInputService:GetMouseLocation()
+		cursorDot.Position = UDim2.fromOffset(p.X, p.Y)
+	end
+end)
+local function syncMouse() modalBtn.Modal = main.Visible end
+main:GetPropertyChangedSignal("Visible"):Connect(syncMouse)
+syncMouse()
+
+------------------------------------------------------------------
+-- SES + BILDIRIM
+------------------------------------------------------------------
+local DEFAULT_SOUND = "rbxasset://sounds/electronicpingshort.wav"
+local alertSound = new("Sound", {
+	SoundId = SOUND_ID:match("%d+") and ("rbxassetid://" .. SOUND_ID:match("%d+")) or DEFAULT_SOUND,
+	Volume = S.soundVol,
+}, gui)
+local lastAlert = 0
+local function playAlert(danger, force)
+	if not S.soundOn and not force then return end
+	if not force and os.clock() - lastAlert < 1.2 then return end
+	lastAlert = os.clock()
+	task.spawn(function()
+		local n = danger and 3 or 1
+		for i = 1, n do
+			alertSound.Volume = S.soundVol
+			alertSound.PlaybackSpeed = danger and (0.8 + i * 0.25) or 1.2
+			alertSound.TimePosition = 0
+			alertSound:Play()
+			task.wait(0.17)
+		end
+	end)
+end
+
+local notifyHolder = new("Frame", {
+	Size = UDim2.fromOffset(300, 400), Position = UDim2.new(1, -316, 1, -416), BackgroundTransparency = 1,
+}, gui)
+new("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding = UDim.new(0, 6) }, notifyHolder)
+
+-- ayni anahtarla tekrar gelen bildirimler tek satirda birlesir: "... x16"
+local notifyActive = {}
+local NOTIFY_FONTS = {
+	Standart = Enum.Font.GothamMedium, Doors = Enum.Font.Antique, STX = Enum.Font.Code, Library = Enum.Font.Fantasy,
+}
+local function notify(text, kind, key, shortText)
+	key = key or text -- ayni metin = ayni bildirim
+	local life = S.keepNotif and 30 or 4
+	local act = notifyActive[key]
+	if act and act.f.Parent and os.clock() - act.t < life then
+		act.n += 1
+		act.t = os.clock()
+		act.lbl.Text = (shortText or text) .. "  x" .. act.n
+		return act
+	end
+	local color = ({ ok = T.ok, warn = T.warn, bad = T.bad, info = T.info, entity = T.orange })[kind or "info"] or T.info
+	local f = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = T.panel, BackgroundTransparency = 1,
+		BorderSizePixel = 0, NoBind = true,
+	}, notifyHolder)
+	round(f, 8)
+	local st = new("UIStroke", { Color = color, Thickness = 1, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, NoBind = true }, f)
+	local lbl = new("TextLabel", {
+		Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1,
+		Text = text, TextColor3 = T.text, TextTransparency = 1, Font = NOTIFY_FONTS[S.notifyStyle] or Enum.Font.GothamMedium, TextSize = 13,
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, NoBind = true,
+	}, f)
+	tween(f, 0.2, { BackgroundTransparency = 0.05 })
+	tween(lbl, 0.2, { TextTransparency = 0 })
+	tween(st, 0.2, { Transparency = 0 })
+	local entry = { f = f, lbl = lbl, n = 1, t = os.clock() }
+	notifyActive[key] = entry
+	-- ekranda en fazla 6 bildirim: fazlasinda en eskisi silinir
+	local frames = {}
+	for _, c in ipairs(notifyHolder:GetChildren()) do
+		if c:IsA("Frame") then table.insert(frames, c) end
+	end
+	if #frames > 6 then frames[1]:Destroy() end
+	local function fade()
+		if not f.Parent then return end
+		local left = life - (os.clock() - entry.t)
+		if left > 0.05 then task.delay(left, fade); return end
+		tween(f, 0.25, { BackgroundTransparency = 1 })
+		tween(lbl, 0.25, { TextTransparency = 1 })
+		tween(st, 0.25, { Transparency = 1 })
+		task.wait(0.3)
+		f:Destroy()
+	end
+	task.delay(life, fade)
+	return entry
+end
+
+------------------------------------------------------------------
+-- LOG TANIMLARI
+------------------------------------------------------------------
+local logList
+local logEntries = {}
+local logPaused = false
+local function logColor(kind)
+	return ({
+		output = T.text, warn = T.warn, error = T.bad, remote = T.info,
+		chat = T.ok, panel = T.purple, entity = T.orange, client = T.sub,
+	})[kind] or T.text
+end
+local logFilters = { remote = true, chat = true, entity = true, panel = true, output = true, warn = true, error = true, client = false }
+
+local function addLog(kind, text)
+	if logPaused or not logList then return end
+	local e = new("TextLabel", {
+		Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		Text = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(text)),
+		TextColor3 = logColor(kind), Font = Enum.Font.Code, TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, Visible = logFilters[kind] ~= false,
+	}, logList)
+	e:SetAttribute("Kind", kind)
+	table.insert(logEntries, e)
+	if #logEntries > 300 then table.remove(logEntries, 1):Destroy() end
+	task.defer(function() logList.CanvasPosition = Vector2.new(0, 1e6) end)
+end
+
+------------------------------------------------------------------
+-- UI BILESENLERI
+------------------------------------------------------------------
+-- ayar degisince 1 sn sonra otomatik kaydet
+local saveQueued = false
+local function markDirty()
+	if saveQueued then return end
+	saveQueued = true
+	task.delay(1, function()
+		saveQueued = false
+		if X.save then X.save() end
+	end)
+end
+
+local pages, tabBtns, currentTab = {}, {}, nil
+local toggleRenders = {}
+
+local function selectTab(name)
+	currentTab = name
+	for n, p in pairs(pages) do p.Visible = (n == name) end
+	for n, b in pairs(tabBtns) do
+		local on = (n == name)
+		tween(b, 0.12, { BackgroundColor3 = on and T.accent or T.panel })
+		b.TextColor3 = on and Color3.new(1, 1, 1) or T.sub
+	end
+end
+
+local function createTab(name, icon, raw)
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.panel, Text = "  " .. icon .. "  " .. name,
+		TextColor3 = T.sub, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+		AutoButtonColor = false, NoBind = true,
+	}, sidebar)
+	round(b, 8)
+	tabBtns[name] = b
+	local page
+	if raw then
+		page = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Visible = false }, content)
+	else
+		page = new("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+			ScrollBarImageColor3 = T.stroke, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), Visible = false,
+		}, content)
+		new("UIListLayout", { Padding = UDim.new(0, 6) }, page)
+		new("UIPadding", { PaddingRight = UDim.new(0, 6) }, page)
+	end
+	pages[name] = page
+	b.MouseButton1Click:Connect(function() selectTab(name) end)
+	return page
+end
+
+local function row(page, h)
+	local f = new("Frame", { Size = UDim2.new(1, 0, 0, h or 38), BackgroundColor3 = T.card, BorderSizePixel = 0 }, page)
+	round(f, 8)
+	return f
+end
+
+local function addSection(page, text)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = string.upper(text),
+		TextColor3 = T.accent, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+	}, page)
+end
+
+local registry = {}
+local function addToggle(page, text, default, cb, key)
+	local r = row(page)
+	new("TextLabel", {
+		Size = UDim2.new(1, -70, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = text,
+		TextColor3 = T.text, Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+	}, r)
+	local sw = new("TextButton", {
+		Size = UDim2.fromOffset(42, 22), Position = UDim2.new(1, -54, 0.5, -11), Text = "",
+		AutoButtonColor = false, BackgroundColor3 = T.stroke, NoBind = true,
+	}, r)
+	round(sw, 11)
+	local knob = new("Frame", { Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = Color3.new(1, 1, 1) }, sw)
+	round(knob, 8)
+	local state = default
+	local function render(anim)
+		local pos = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3)
+		local col = state and T.accent or T.stroke
+		if anim then
+			tween(knob, 0.15, { Position = pos })
+			tween(sw, 0.15, { BackgroundColor3 = col })
+		else
+			knob.Position, sw.BackgroundColor3 = pos, col
+		end
+	end
+	render(false)
+	table.insert(toggleRenders, { sw = sw, render = render })
+	local function set(v) state = v; render(true) end
+	sw.MouseButton1Click:Connect(function()
+		state = not state
+		render(true)
+		cb(state)
+		markDirty()
+	end)
+	if key then registry[key] = { set = set, default = default, cb = cb, get = function() return state end } end
+	return set
+end
+
+local activeSlider
+local function addSlider(page, text, min, max, default, cb, step, key)
+	step = step or 1
+	local r = row(page, 54)
+	new("TextLabel", {
+		Size = UDim2.new(1, -90, 0, 24), Position = UDim2.fromOffset(12, 4), BackgroundTransparency = 1, Text = text,
+		TextColor3 = T.text, Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+	}, r)
+	local valLbl = new("TextLabel", {
+		Size = UDim2.new(0, 70, 0, 24), Position = UDim2.new(1, -82, 0, 4), BackgroundTransparency = 1, Text = fmt(default),
+		TextColor3 = T.accent, Font = Enum.Font.GothamBold, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Right,
+	}, r)
+	local track = new("Frame", { Size = UDim2.new(1, -24, 0, 6), Position = UDim2.new(0, 12, 0, 38), BackgroundColor3 = T.stroke, BorderSizePixel = 0 }, r)
+	round(track, 3)
+	local fill = new("Frame", { Size = UDim2.new((default - min) / (max - min), 0, 1, 0), BackgroundColor3 = T.accent, BorderSizePixel = 0 }, track)
+	round(fill, 3)
+	local knob = new("Frame", {
+		Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+	}, fill)
+	round(knob, 7)
+	local hit = new("TextButton", { Size = UDim2.new(1, 0, 0, 26), Position = UDim2.fromOffset(0, -10), Text = "", BackgroundTransparency = 1 }, track)
+
+	local curVal = default
+	if key then
+		registry[key] = {
+			default = default, cb = cb, get = function() return curVal end,
+			set = function(v)
+				v = math.clamp(v, min, max)
+				curVal = v
+				fill.Size = UDim2.new((v - min) / (max - min), 0, 1, 0)
+				valLbl.Text = fmt(v)
+			end,
+		}
+	end
+	local function setFromX(x, final)
+		local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		local v = math.floor((min + (max - min) * rel) / step + 0.5) * step
+		v = math.clamp(v, min, max)
+		fill.Size = UDim2.new((v - min) / (max - min), 0, 1, 0)
+		valLbl.Text = fmt(v)
+		curVal = v
+		cb(v, final)
+		if final then markDirty() end
+	end
+	hit.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			activeSlider = setFromX
+			setFromX(i.Position.X, false)
+		end
+	end)
+end
+UserInputService.InputChanged:Connect(function(i)
+	if activeSlider and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+		activeSlider(i.Position.X, false)
+	end
+end)
+UserInputService.InputEnded:Connect(function(i)
+	if activeSlider and (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then
+		activeSlider(i.Position.X, true)
+		activeSlider = nil
+	end
+end)
+
+-- colorKey: "accent" / "bad" gibi (opsiyonel)
+local function addButton(page, text, cb, colorKey)
+	local function base() return colorKey and T[colorKey] or T.card end
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = base(), Text = text, TextColor3 = T.text,
+		Font = Enum.Font.GothamMedium, TextSize = 13, AutoButtonColor = false,
+	}, page)
+	round(b, 8)
+	stroke(b)
+	b.MouseEnter:Connect(function() tween(b, 0.1, { BackgroundColor3 = base():Lerp(Color3.new(1, 1, 1), 0.12) }) end)
+	b.MouseLeave:Connect(function() tween(b, 0.1, { BackgroundColor3 = base() }) end)
+	b.MouseButton1Click:Connect(function() cb(b) end)
+	return b
+end
+
+local function addTextBox(page, text, default, cb, key)
+	local r = row(page)
+	new("TextLabel", {
+		Size = UDim2.new(0, 80, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = text,
+		TextColor3 = T.text, Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+	}, r)
+	local box = new("TextBox", {
+		Size = UDim2.new(1, -106, 0, 26), Position = UDim2.new(0, 94, 0.5, -13), BackgroundColor3 = T.bg,
+		Text = default, PlaceholderText = "...", TextColor3 = T.text, Font = Enum.Font.Code, TextSize = 12,
+		ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left, PlaceholderColor3 = T.sub,
+	}, r)
+	round(box, 6)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, box)
+	box.FocusLost:Connect(function() cb(box.Text); markDirty() end)
+	if key then
+		registry[key] = {
+			default = default, cb = cb, get = function() return box.Text end,
+			set = function(v) box.Text = v end,
+		}
+	end
+	return box
+end
+
+------------------------------------------------------------------
+-- TEMA UYGULAMA
+------------------------------------------------------------------
+local function setBgImage()
+	local id = S.bgId:match("%d+")
+	if id then
+		bgImage.Image = "rbxassetid://" .. id
+		bgImage.ImageTransparency = S.bgTrans
+		bgImage.Visible = true
+	else
+		bgImage.Visible = false
+	end
+end
+
+local function applyTheme(th)
+	for k, v in pairs(th) do
+		if k ~= "name" then T[k] = v end
+	end
+	for i = #bound, 1, -1 do
+		local o, prop, key = bound[i][1], bound[i][2], bound[i][3]
+		if o and o.Parent then
+			o[prop] = T[key]
+			if prop == "BackgroundColor3" then
+				local a = alphaFor(key)
+				if a ~= nil and o.BackgroundTransparency < 0.99 then o.BackgroundTransparency = a end
+			end
+		else
+			table.remove(bound, i)
+		end
+	end
+	for _, t in ipairs(toggleRenders) do
+		if t.sw.Parent then t.render(false) end
+	end
+	updateTitle()
+	if currentTab then selectTab(currentTab) end
+	notify("Tema: " .. th.name, "ok")
+	if th.name:find("Anime") and not S.bgId:match("%d+") then
+		notify("Anime görseli için Ayarlar'a görsel ID gir", "info")
+	end
+end
+
+------------------------------------------------------------------
+-- FLY
+------------------------------------------------------------------
+local flyBV, flyBG
+local function stopFly()
+	if flyBV then flyBV:Destroy() flyBV = nil end
+	if flyBG then flyBG:Destroy() flyBG = nil end
+	local hum = getHum()
+	if hum then hum.PlatformStand = false end
+end
+local function ensureFly()
+	local root = getRoot()
+	if not root then return end
+	if not flyBV or flyBV.Parent ~= root then
+		if flyBV then flyBV:Destroy() end
+		flyBV = new("BodyVelocity", { MaxForce = Vector3.new(1e9, 1e9, 1e9), Velocity = Vector3.zero }, root)
+	end
+	if not flyBG or flyBG.Parent ~= root then
+		if flyBG then flyBG:Destroy() end
+		flyBG = new("BodyGyro", { MaxTorque = Vector3.new(1e9, 1e9, 1e9), P = 9e4, CFrame = root.CFrame }, root)
+	end
+end
+local function updateFly()
+	local hum, root = getHum(), getRoot()
+	if not (hum and root) then return end
+	ensureFly()
+	hum.PlatformStand = true
+	local dir = hum.MoveDirection
+	local vert = 0
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vert += 1 end
+	if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then vert -= 1 end
+	local look = camera.CFrame.LookVector
+	if dir.Magnitude > 0.1 then
+		local fwd = Vector3.new(look.X, 0, look.Z)
+		if fwd.Magnitude > 0 then
+			local dot = dir:Dot(fwd.Unit)
+			if dot > 0.5 then dir = dir + Vector3.new(0, look.Y * dot, 0) end
+		end
+	end
+	flyBV.Velocity = (dir + Vector3.new(0, vert, 0)) * S.flySpeed
+	flyBG.CFrame = CFrame.new(root.Position, root.Position + Vector3.new(look.X, 0, look.Z))
+end
+
+------------------------------------------------------------------
+-- ESP
+------------------------------------------------------------------
+local espObjs = {}
+local function removeESP(plr)
+	local o = espObjs[plr]
+	if o then
+		o.hl:Destroy()
+		o.bb:Destroy()
+		espObjs[plr] = nil
+	end
+end
+local function clearESP() for plr in pairs(espObjs) do removeESP(plr) end end
+
+local function buildESP(plr, char, root)
+	local o = { char = char }
+	o.hl = new("Highlight", {
+		Adornee = char, FillTransparency = 0.5, OutlineColor = Color3.new(1, 1, 1),
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, NoBind = true,
+	}, gui)
+	o.bb = new("BillboardGui", {
+		Adornee = char:FindFirstChild("Head") or root, Size = UDim2.fromOffset(200, 40),
+		StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
+	}, gui)
+	o.nameLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, TextStrokeTransparency = 0,
+		Font = Enum.Font.GothamBold, TextScaled = true, TextColor3 = Color3.new(1, 1, 1), NoBind = true,
+	}, o.bb)
+	o.distLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
+		TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, TextColor3 = T.warn,
+	}, o.bb)
+	espObjs[plr] = o
+	return o
+end
+
+local function updateESP()
+	local myRoot = getRoot()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local char = plr.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if char and root then
+				local dist = myRoot and (root.Position - myRoot.Position).Magnitude or 0
+				if dist > math.min(S.espMax, 600) then
+					removeESP(plr)
+					continue
+				end
+				local o = espObjs[plr]
+				if o and o.char ~= char then removeESP(plr); o = nil end
+				if not o then o = buildESP(plr, char, root) end
+				local vis = true
+				local color = S.espTeam and plr.TeamColor.Color or PAL[S.colIdx.player or 1][2]
+				o.hl.Enabled = vis and S.espHighlight
+				o.hl.FillColor = color
+				o.bb.Enabled = vis and (S.espName or S.espDist)
+				o.nameLbl.Visible = S.espName
+				o.nameLbl.Text = plr.DisplayName .. " (@" .. plr.Name .. ")"
+				o.nameLbl.TextColor3 = color
+				o.distLbl.Visible = S.espDist
+				o.distLbl.Text = string.format("%d stud", math.floor(dist + 0.5))
+			else
+				removeESP(plr)
+			end
+		end
+	end
+end
+Players.PlayerRemoving:Connect(removeESP)
+
+------------------------------------------------------------------
+-- SPAWN IZLEYICI + SESLI UYARI
+------------------------------------------------------------------
+local ents = {}
+-- anahtar kelimeler ve sonuclar onbellekte: ayni isim tekrar tekrar sorulur (oda gecislerinde binlerce kez)
+local kwCache, hitCache = {}, {}
+local function listHas(listStr, name)
+	local kws = kwCache[listStr]
+	if not kws then
+		kws = {}
+		for kw in listStr:lower():gmatch("[^,%s]+") do kws[#kws + 1] = kw end
+		kwCache[listStr] = kws
+	end
+	if #kws == 0 then return false end
+	local hc = hitCache[listStr]
+	if not hc then
+		hc = {}
+		hitCache[listStr] = hc
+	end
+	local r = hc[name]
+	if r == nil then
+		local l = name:lower()
+		r = false
+		for _, kw in ipairs(kws) do
+			if l:find(kw, 1, true) then r = true break end
+		end
+		if #name < 60 then hc[name] = r end
+	end
+	return r
+end
+local function entPos(inst)
+	if inst:IsA("Model") then return inst:GetPivot().Position end
+	return inst.Position
+end
+local function untrackEntity(inst)
+	local o = ents[inst]
+	if o then
+		if o.hl then o.hl:Destroy() end
+		if o.bb then o.bb:Destroy() end
+		ents[inst] = nil
+	end
+end
+local function clearEntities() for i in pairs(ents) do untrackEntity(i) end end
+
+-- ESP renk paleti (tiklayinca sirayla degisir)
+local PAL = {
+	{ "Kırmızı", Color3.fromRGB(248, 113, 113) }, { "Turuncu", Color3.fromRGB(251, 146, 60) },
+	{ "Sarı", Color3.fromRGB(250, 204, 21) }, { "Yeşil", Color3.fromRGB(74, 222, 128) },
+	{ "Mavi", Color3.fromRGB(96, 165, 250) }, { "Mor", Color3.fromRGB(192, 132, 252) },
+	{ "Pembe", Color3.fromRGB(244, 114, 182) }, { "Beyaz", Color3.fromRGB(240, 240, 240) },
+}
+-- ek ESP kategorileri (hedef, para, merdiven, diger)
+local function extraCat(name)
+	if S.espObj and listHas(S.objWords, name) then return "objective" end
+	if S.espCur and listHas(S.curWords, name) then return "currency" end
+	if S.espLad and listHas(S.ladWords, name) then return "ladder" end
+	if S.espMisc and S.miscWords ~= "" and listHas(S.miscWords, name) then return "misc" end
+	return nil
+end
+
+-- bilinen varlik adlari (model adi -> gosterilecek ad + uyari mesaji)
+local ENT_DB = {}
+do
+	local function e(model, alias, body) ENT_DB[model] = { alias = alias, title = "Entity '" .. alias .. "' has spawned.", body = body } end
+	e("TV_Stand", "Noise_TV", "Dont get near it")
+	e("Portrait", "Portrait", "Use him to duplicate items.")
+	e("StemsEntity", "Balls", "Balls.")
+	e("NoiseModel", "Noise", "Dont let it touch you.")
+	e("Creak", "Creak", "Dont touch him.")
+	e("DronesStampede", "Drones Stampede", "Find a hiding spot.")
+	e("TellerRig", "Teller", "Dont worry, hes only annoying.")
+	e("Scribbles", "Scribbles", "Find a hiding spot.")
+	e("BashMoving", "Bash", "Find a hiding spot.")
+	e("RushMoving", "Rush", "Find a hiding spot.")
+	e("AmbushMoving", "Ambush", "Find a hiding spot.")
+	e("Eyes", "Eyes", "Avoid looking at it.")
+	e("Lookman", "Eyes", "Avoid looking at it.")
+	e("BackdoorRush", "Blitz", "Find a hiding spot.")
+	e("BackdoorLookman", "Lookman", "Avoid looking at its eyes.")
+	e("Groundskeeper", "Groundskeeper", "Avoid stepping on the grass.")
+	e("A60", "A-60", "Find a hiding spot.")
+	e("A120", "A-120", "Find a hiding spot.")
+	e("GloombatSwarm", "Gloombat Swarm", "Keep all light sources turned off.")
+	e("GlitchRush", "RNIUSHCG==", "Find a hiding spot.")
+	e("GlitchAmbush", "AR0xMBUSH", "Find a hiding spot.")
+	e("MonumentEntity", "Monument", "It can't move while you are looking at it.")
+	e("JeffTheKiller", "Jeff the Killer", "Avoid touching him.")
+	e("CustomEntity", "Custom Entity", "Find a hiding spot.")
+	e("FrozenAmbush", "Frozen Ambush", "Find a hiding spot.")
+	e("SallyMoving", "Sally", "Find her horse and rop it.")
+end
+
+-- her zaman yok sayilan isimler (kayitli ayarlar bunu ezemez)
+local BUILTIN_IGNORE = "frame,knob,hinge,doorway,jamb,trim,handle,hitbox,hurtbox,terrain,camera,baseplate,spawnlocation,"
+	.. "wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,panel,cube,mesh,decal,glow,sign,start_,end_"
+local function ignored(name)
+	return listHas(BUILTIN_IGNORE, name) or listHas(S.entIgnore, name)
+end
+
+-- hangi tur? entity = humanoid / tehlikeli isim, door, hide (dolap vb.), item
+local function classify(inst)
+	if inst:IsA("Terrain") then return nil end
+	local name = inst.Name
+	if ENT_DB[name] and (inst:IsA("Model") or inst:IsA("BasePart")) then return "entity", true end
+	if not inst:IsA("Model") then
+		-- yerdeki Tool'lar ve tek parca kapi / esyalar
+		if inst:IsA("Tool") then
+			if S.entItem and inst.Parent and not inst.Parent:FindFirstChildOfClass("Humanoid") then return "item" end
+			return nil
+		end
+		if inst:IsA("BasePart") and not ignored(name) then
+			if S.entDoor and listHas(S.entDoors, name) then return "door" end
+			if S.entItem and listHas(S.entItems, name) then return "item" end
+			if S.entChest and listHas(S.entChests, name) then return "chest" end
+			local x = extraCat(name)
+			if x then return x end
+		end
+		return nil
+	end
+	if Players:GetPlayerFromCharacter(inst) then return nil end
+	if ignored(name) then return nil end
+	if inst:FindFirstChildOfClass("Humanoid") then return "entity", listHas(S.entDanger, name) end
+	if listHas(S.entDanger, name) then return "entity", true end
+	if S.entDoor and listHas(S.entDoors, name) then return "door" end
+	if S.entHide and listHas(S.entHides, name) then return "hide" end
+	if S.entItem and listHas(S.entItems, name) then return "item" end
+	if S.entChest and listHas(S.entChests, name) then return "chest" end
+	return extraCat(name)
+end
+
+-- sahte kapi: kendisi veya ust modellerinden birinin adi sahte kelimelerinden birini iceriyorsa
+local function isFakeDoor(inst)
+	local a = inst
+	while a and a ~= workspace do
+		if listHas(S.fakeWords, a.Name) then return true end
+		a = a.Parent
+	end
+	return false
+end
+
+local CAT_ICON = { entity = "☠ ", door = "🚪 ", hide = "🗄 ", item = "★ ", chest = "📦 ",
+	currency = "💰 ", ladder = "🪜 ", objective = "🎯 ", misc = "• " }
+
+local function makeHl(inst, color)
+	return new("Highlight", {
+		Adornee = inst, FillColor = color, FillTransparency = 0.55, OutlineColor = color,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, NoBind = true,
+	}, gui)
+end
+
+local function trackEntity(inst, silent)
+	if ents[inst] or not inst.Parent or not S.entOn then return end
+	local cat, danger = classify(inst)
+	if not cat then return end
+	-- zaten izlenen bir modelin icindeyse atla (dolabin kapagi gibi)
+	local a = inst.Parent
+	while a and a ~= workspace do
+		if ents[a] then return end
+		a = a.Parent
+	end
+	local part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	if not part then return end
+
+	local pc = PAL[S.colIdx[cat] or 8][2]
+	local color = cat == "entity" and (danger and pc or T.orange) or pc
+	local fake = cat == "door" and isFakeDoor(inst)
+	if fake then color = T.bad end
+	local o = { part = part, cat = cat, color = color, fake = fake }
+	local db = ENT_DB[inst.Name]
+	local shown = cat == "door" and (fake and "Sahte kapı" or "Kapı") or (db and db.alias) or inst.Name
+	if #shown > 18 then shown = shown:sub(1, 16) .. "…" end
+	o.text = (danger and "☠ " or CAT_ICON[cat]) .. shown
+	ents[inst] = o
+	-- once alt parcalar izlendiyse (door frame vb.), sadece en dis kapiyi birak
+	for other in pairs(ents) do
+		if other ~= inst and other:IsDescendantOf(inst) then untrackEntity(other) end
+	end
+
+	if cat == "item" and S.notifyItems and not silent then
+		local mr = getRoot()
+		local d = mr and math.floor((part.Position - mr.Position).Magnitude + 0.5) or 0
+		notify("★ " .. inst.Name .. " (" .. d .. " stud)", "info", "item:" .. inst.Name, "★ " .. inst.Name)
+	end
+	if cat == "entity" and not silent and S.notifyEnt
+		and not (db and S.entMute ~= "" and listHas(S.entMute, db.alias)) then
+		local myRoot = getRoot()
+		local dist = myRoot and math.floor((part.Position - myRoot.Position).Magnitude + 0.5) or 0
+		local prefix = (danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu"
+		local full = prefix .. " (" .. dist .. " stud)"
+		if db then
+			prefix = "☠ " .. db.title
+			full = prefix .. " " .. db.body .. " (" .. dist .. " stud)"
+		end
+		local entry = notify(full, danger and "bad" or "entity", "ent:" .. inst.Name, prefix)
+		if entry.n == 1 then
+			addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
+		end
+		playAlert(danger)
+		if S.entChat and entry.n == 1 then
+			pcall(function()
+				local ch = TextChatService:FindFirstChild("TextChannels")
+				ch = ch and ch:FindFirstChild("RBXGeneral")
+				if ch then ch:SendAsync((db and db.title or (inst.Name .. " spawned.")) .. (db and (" " .. db.body) or "")) end
+			end)
+		end
+	end
+end
+
+-- listeler / anahtarlar degisince: uymayanlari sil, mevcut haritayi yeniden tara
+local scanId = 0
+function X.refreshEnt()
+	scanId += 1
+	local id = scanId
+	task.delay(0.3, function()
+		if id ~= scanId then return end
+		for inst in pairs(ents) do
+			if not S.entOn or not classify(inst) then untrackEntity(inst) end
+		end
+		if not S.entOn then return end
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if id ~= scanId then return end
+			if d:IsA("Model") or d:IsA("BasePart") or d:IsA("Tool") then trackEntity(d, true) end
+			n += 1
+			if n % 1500 == 0 then task.wait() end
+		end
+	end)
+end
+X.refreshEnt()
+
+X.onAdded(function(d)
+	if not S.entOn then return end
+	local ok = d:IsA("Model") or d:IsA("Tool") or (d:IsA("BasePart")
+		and ((S.entDoor and listHas(S.entDoors, d.Name)) or (S.entItem and listHas(S.entItems, d.Name))
+		or (S.entChest and listHas(S.entChests, d.Name))))
+	if not ok then return end
+	trackEntity(d, os.clock() - startTime < 4)
+end)
+
+local MAX_SHOW = 600 -- bundan uzaktaki hicbir sey gosterilmez / islenmez
+local MAX_DOOR_HL = 24 -- Roblox ayni anda ~31 highlight cizer; en yakin kapilara verilir
+local DEDUP = 8 -- ayni turden bu kadar yakin etiketlerden sadece biri gosterilir
+
+-- etiket sadece menzile girince olusturulur, cikinca silinir (uzaktakiler hic cizilmez)
+local function ensureBb(o)
+	if o.bb then return end
+	o.bb = new("BillboardGui", {
+		Adornee = o.part, Size = UDim2.fromOffset(180, 40), StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
+	}, gui)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = o.text, TextTruncate = Enum.TextTruncate.AtEnd,
+		TextColor3 = o.color, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
+	}, o.bb)
+	o.distLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
+		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
+	}, o.bb)
+end
+local function dropBb(o)
+	if o.bb then
+		o.bb:Destroy()
+		o.bb, o.distLbl, o.lastDist, o.f = nil, nil, nil, nil
+	end
+end
+
+local function limitFor(cat)
+	local lim = cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
+	return math.min(lim, MAX_SHOW)
+end
+
+local function updateEntities()
+	local myRoot = getRoot()
+	-- 1) menzildekileri turlere ayir
+	local byCat = {}
+	for inst, o in pairs(ents) do
+		if not inst:IsDescendantOf(workspace) then
+			untrackEntity(inst)
+		else
+			if not o.part:IsDescendantOf(workspace) then
+				dropBb(o)
+				o.part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+			end
+			o.show = false
+			if o.part and myRoot then
+				local dist = (o.part.Position - myRoot.Position).Magnitude
+				o.dist = dist
+				if dist <= limitFor(o.cat) then
+					local key = o.fake and "doorFake" or o.cat
+					local l = byCat[key]
+					if not l then l = {}; byCat[key] = l end
+					l[#l + 1] = o
+				end
+			end
+		end
+	end
+	-- 2) ust uste binen etiketleri ele: en yakin olan kalir (varliklar haric)
+	for cat, list in pairs(byCat) do
+		table.sort(list, function(a, b) return a.dist < b.dist end)
+		local kept = {}
+		for _, o in ipairs(list) do
+			local pos = o.part.Position
+			local dup = false
+			if cat ~= "entity" then
+				for _, k in ipairs(kept) do
+					if (k - pos).Magnitude < DEDUP then dup = true; break end
+				end
+			end
+			if not dup then
+				kept[#kept + 1] = pos
+				o.show = true
+			end
+		end
+	end
+	-- 3) goster / gizle
+	local doors = {}
+	for inst, o in pairs(ents) do
+		local cat = o.cat
+		if o.show then
+			ensureBb(o)
+			o.bb.Adornee = o.part
+			-- uzaktaki yazilar kucuk, yaklastikca buyur
+			local f = 1.2 - 0.75 * math.min(o.dist / limitFor(cat), 1)
+			if not o.f or math.abs(f - o.f) > 0.03 then
+				o.f = f
+				o.bb.Size = UDim2.fromOffset(180 * f, 40 * f)
+			end
+			local d = math.floor(o.dist + 0.5)
+			if d ~= o.lastDist then
+				o.lastDist = d
+				o.distLbl.Text = d .. " stud"
+			end
+			if cat == "entity" then
+				o.wantHl = S.entHighlight
+			elseif cat == "door" then
+				o.wantHl = false
+				if S.entDoorHl then table.insert(doors, o) end
+			else
+				o.wantHl = S.entObjHl
+			end
+		else
+			dropBb(o)
+			o.wantHl = false
+		end
+	end
+	table.sort(doors, function(a, b) return a.dist < b.dist end)
+	for i = 1, math.min(#doors, MAX_DOOR_HL) do doors[i].wantHl = true end
+	for inst, o in pairs(ents) do
+		if o.wantHl and not o.hl then
+			o.hl = makeHl(inst, o.color)
+		elseif not o.wantHl and o.hl then
+			o.hl:Destroy()
+			o.hl = nil
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- HITBOX GORUNTULEYICI
+------------------------------------------------------------------
+local hbViz = {}
+local function hbTarget(p)
+	if not p:IsA("BasePart") then return false end
+	local n = p.Name:lower()
+	return n:find("hitbox", 1, true) ~= nil or n:find("hurtbox", 1, true) ~= nil
+end
+local function addHbViz(p, color)
+	if hbViz[p] then return end
+	hbViz[p] = new("BoxHandleAdornment", {
+		Adornee = p, Size = p.Size, Color3 = color or Color3.fromRGB(255, 70, 70),
+		Transparency = 0.65, AlwaysOnTop = true, ZIndex = 5, NoBind = true,
+	}, gui)
+end
+local function clearHbViz()
+	for _, a in pairs(hbViz) do a:Destroy() end
+	table.clear(hbViz)
+end
+local function updateHbViz()
+	for p, a in pairs(hbViz) do
+		if not p.Parent then a:Destroy(); hbViz[p] = nil else a.Size = p.Size end
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+		if root then addHbViz(root, plr == player and T.ok or nil) end
+	end
+end
+X.onAdded(function(d)
+	if S.hbViz and hbTarget(d) then addHbViz(d) end
+end)
+
+------------------------------------------------------------------
+-- SEKMELER
+------------------------------------------------------------------
+-- KAYGAN ZEMIN + ANTI GERI-ATMA + DOKUNMA (Heartbeat'ten cagrilir)
+do
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local floorOrig, slipChar, acc = {}, nil, 0
+	local SLIP_PROPS = PhysicalProperties.new(0.7, 2, 0, 100, 100)
+	local FLOOR_PROPS = PhysicalProperties.new(0.7, 1.5, 0, 100, 100)
+	local lastNote = 0
+
+	local function eachPart(c, fn)
+		for _, p in ipairs(c:GetDescendants()) do
+			if p:IsA("BasePart") then fn(p) end
+		end
+	end
+
+	-- sadece oldurucu bloklarin dokunmasini kapat (kapi vb. etkilenmez)
+	local killOrig = {}
+	local dmgOrig, charOrig, lastFlee = {}, {}, 0
+	local function isKill(p)
+		if not p:IsA("BasePart") then return false end
+		if listHas(S.killNames, p.Name) then return true end
+		local par = p.Parent
+		return par ~= nil and par:IsA("Model") and listHas(S.killNames, par.Name)
+	end
+	local function disableKill(p)
+		if killOrig[p] == nil then
+			killOrig[p] = p.CanTouch
+			p.CanTouch = false
+		end
+	end
+	local killScan = 0
+	function X.refreshKill()
+		killScan += 1
+		local id = killScan
+		for p, orig in pairs(killOrig) do
+			if p.Parent then p.CanTouch = orig end
+		end
+		table.clear(killOrig)
+		if not S.noTouch then return end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if id ~= killScan then return end
+				if isKill(d) then disableKill(d) end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	end
+	X.onAdded(function(d)
+		if S.noTouch and isKill(d) then disableKill(d) end
+	end)
+
+	-- yaratik tam dokunacagi anin ~1 sn oncesinde karakteri uzaga firlat, yaratik gecince eski yere geri koy
+	function X.dodgeAway()
+		local root = getRoot()
+		if X.dodging or not root then return end
+		X.dodging = true
+		local origin = root.CFrame
+		task.spawn(function()
+			X.hold = true
+			teleportTo(origin + Vector3.new(0, S.dodgeFar, 0))
+			notify("Yaratık yaklaştı, uzağa fırlatıldın", "warn")
+			local t0 = os.clock()
+			while os.clock() - t0 < 15 and getRoot() do
+				task.wait(0.1)
+				if os.clock() - t0 >= S.dodgeStay then
+					local clear = true
+					for _, o in pairs(ents) do
+						if o.cat == "entity" and o.part and o.part:IsDescendantOf(workspace)
+							and (o.part.Position - origin.Position).Magnitude < S.dodgeBack then
+							clear = false
+							break
+						end
+					end
+					if clear then break end
+				end
+			end
+			if getRoot() then teleportTo(origin) end
+			X.hold = false
+			X.dodging = false
+		end)
+	end
+
+	-- "BAKINCA HASAR VEREN" yaratiklar (Eyes vb.): kamerayi yere cevir / yerelde gizle
+	local lookOrig, lastLookNote = {}, 0
+	local function isLook(inst) return listHas(S.lookNames, inst.Name) end
+	local function hideObj(p)
+		if lookOrig[p] then return end
+		if p:IsA("BasePart") then
+			lookOrig[p] = { p.Transparency, p.CanQuery }
+			p.Transparency = 1
+			p.CanQuery = false
+		elseif p:IsA("Decal") or p:IsA("Texture") then
+			lookOrig[p] = { p.Transparency }
+			p.Transparency = 1
+		elseif p:IsA("Light") or p:IsA("ParticleEmitter") then
+			lookOrig[p] = { p.Enabled }
+			p.Enabled = false
+		end
+	end
+	function X.restoreLook()
+		for p, v in pairs(lookOrig) do
+			if p.Parent then
+				if p:IsA("BasePart") then
+					p.Transparency, p.CanQuery = v[1], v[2]
+				elseif p:IsA("Decal") or p:IsA("Texture") then
+					p.Transparency = v[1]
+				else
+					p.Enabled = v[1]
+				end
+			end
+		end
+		table.clear(lookOrig)
+	end
+	function X.hideLookers()
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and isLook(inst) and inst:IsDescendantOf(workspace) then
+				hideObj(inst)
+				for _, d in ipairs(inst:GetDescendants()) do hideObj(d) end
+			end
+		end
+	end
+	RunService:BindToRenderStep("HunterLookGuard", Enum.RenderPriority.Camera.Value + 1, function()
+		if not S.lookGuard then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and o.part and isLook(inst) and o.part:IsDescendantOf(workspace) then
+				local pos = inst:IsA("Model") and inst:GetPivot().Position or o.part.Position
+				local v, on = cam:WorldToViewportPoint(pos)
+				if on and v.Z > 0 and v.Z < S.lookRange then
+					local _, yaw = cam.CFrame:ToEulerAnglesYXZ()
+					cam.CFrame = CFrame.new(cam.CFrame.Position) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(-math.rad(80), 0, 0)
+					if os.clock() - lastLookNote > 3 then
+						lastLookNote = os.clock()
+						notify("'" .. inst.Name .. "' ekranda: kamera yere çevrildi", "warn")
+					end
+					break
+				end
+			end
+		end
+	end)
+
+	function X.restoreEntDmg()
+		for p in pairs(dmgOrig) do
+			if p.Parent then p.CanTouch = true end
+		end
+		table.clear(dmgOrig)
+		for p in pairs(charOrig) do
+			if p.Parent then p.CanTouch = true end
+		end
+		table.clear(charOrig)
+	end
+
+	function X.restoreSlip()
+		for part, orig in pairs(floorOrig) do
+			if part.Parent then part.CustomPhysicalProperties = orig or nil end
+		end
+		table.clear(floorOrig)
+		local c = getChar()
+		if c then eachPart(c, function(p) p.CustomPhysicalProperties = nil end) end
+		slipChar = nil
+	end
+
+	function X.update(dt, hum, root)
+		-- isinlanma / kacis sirasinda fizik karakteri firlatmasin
+		if X.hold then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+		-- sunucu bizi geri attiysa (tek karede buyuk sicrama) eski konuma dondur
+		local pos = root.Position
+		if S.antiRubber and (S.speedOn or S.flyOn) and X.lastPos and dt < 0.25 then
+			local allowed = math.max(25, X.cur * dt * 3, S.flySpeed * dt * 3)
+			if (pos - X.lastPos).Magnitude > allowed then
+				root.CFrame = CFrame.new(X.lastPos) * (root.CFrame - root.CFrame.Position)
+				pos = X.lastPos
+				if os.clock() - lastNote > 2 then
+					lastNote = os.clock()
+					notify("Geri atma engellendi", "warn")
+				end
+			end
+		end
+		X.lastPos = pos
+
+		acc += dt
+		if acc < 0.15 then return end
+		acc = 0
+		local c = hum.Parent
+
+		if S.enableJump then
+			pcall(function()
+				hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+				if hum.UseJumpPower then
+					if hum.JumpPower < 30 then hum.JumpPower = 50 end
+				elseif hum.JumpHeight < 4 then
+					hum.JumpHeight = 7.2
+				end
+			end)
+		end
+
+		-- yaratik hasari: yaratigin parcalarinin dokunmasini kapat
+		if S.noEntDmg then
+			for inst, o in pairs(ents) do
+				if o.cat == "entity" and (o.dist or 1e9) < 250 and os.clock() - (o.dmgT or 0) > 1.5
+					and inst:IsDescendantOf(workspace) then
+					o.dmgT = os.clock()
+					for _, p in ipairs(inst:GetDescendants()) do
+						if p:IsA("BasePart") and p.CanTouch then
+							dmgOrig[p] = true
+							p.CanTouch = false
+						end
+					end
+				end
+			end
+		end
+		-- yaratik yakindaysa KARAKTERIN dokunmasini da kapat (uzaklasinca geri acilir, kapilar bozulmaz)
+		local nearEnt = false
+		if S.noEntDmg then
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and (o.dist or 1e9) < 40 then nearEnt = true; break end
+			end
+		end
+		if nearEnt or S.charNoTouch then
+			eachPart(c, function(p)
+				if p.CanTouch then
+					charOrig[p] = true
+					p.CanTouch = false
+				end
+			end)
+		elseif next(charOrig) then
+			for p in pairs(charOrig) do
+				if p.Parent then p.CanTouch = true end
+			end
+			table.clear(charOrig)
+		end
+		-- yaratik cok yaklasirsa guvenli noktaya kac
+		if S.flee and os.clock() - lastFlee > 2 then
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and o.dist and o.dist < S.fleeDist then
+					local dest = X.safeCF or safePos
+					if dest then
+						lastFlee = os.clock()
+						teleportTo(dest + Vector3.new(0, 5, 0))
+						notify("Yaratık yaklaştı, kaçıldı", "warn")
+					end
+					break
+				end
+			end
+		end
+
+		if S.hideLook and os.clock() - (X.lookT or 0) > 1 then
+			X.lookT = os.clock()
+			X.hideLookers()
+		end
+
+		-- yaratik yaklasma hizindan "1 sn sonra dokunur" tahmini
+		if S.dodge and not X.dodging then
+			local now = os.clock()
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and o.part and o.part:IsDescendantOf(workspace) then
+					local d = (o.part.Position - root.Position).Magnitude
+					local trigger = d < S.dodgeMin
+					if o.pD and now > o.pT then
+						local closing = (o.pD - d) / (now - o.pT)
+						if closing > 2 and d / closing < S.dodgeTime then trigger = true end
+					end
+					o.pD, o.pT = d, now
+					if trigger then
+						X.dodgeAway()
+						break
+					end
+				end
+			end
+		end
+
+		if S.antiSlip then
+			if slipChar ~= c then
+				slipChar = c
+				eachPart(c, function(p) p.CustomPhysicalProperties = SLIP_PROPS end)
+			end
+			rayParams.FilterDescendantsInstances = { c }
+			local hit = workspace:Raycast(root.Position, Vector3.new(0, -8, 0), rayParams)
+			local fp = hit and hit.Instance
+			if fp and not fp:IsA("Terrain") and floorOrig[fp] == nil
+				and (fp.Material == Enum.Material.Ice or fp.CurrentPhysicalProperties.Friction < 0.5) then
+				floorOrig[fp] = fp.CustomPhysicalProperties or false
+				fp.CustomPhysicalProperties = FLOOR_PROPS
+			end
+		end
+	end
+end
+
+-- SONSUZ STAMINA / ENERJI, HIZLI ETKILESIM, ANTI-AFK
+do
+	local VirtualUser = game:GetService("VirtualUser")
+	local maxSeen = setmetatable({}, { __mode = "k" })
+
+	local function isStat(name)
+		if name:lower():find("max", 1, true) then return false end
+		return (S.infStamina and listHas(S.staminaNames, name)) or (S.infFood and listHas(S.foodNames, name))
+	end
+	local function numOf(c)
+		if c and (c:IsA("NumberValue") or c:IsA("IntValue")) then return c.Value end
+	end
+	-- en yuksek gorulen deger (veya oyunun kendi Max degeri) kadar doldur
+	local function maxFor(obj, name, current)
+		local store = maxSeen[obj]
+		if not store then store = {}; maxSeen[obj] = store end
+		local m = math.max(store[name] or 0, current)
+		for _, cand in ipairs({ "Max" .. name, name .. "Max", "Max_" .. name, name .. "_Max" }) do
+			local v = obj:GetAttribute(cand)
+			if typeof(v) ~= "number" then v = numOf(obj:FindFirstChild(cand)) end
+			if typeof(v) == "number" and v > m then m = v end
+		end
+		store[name] = m
+		return m
+	end
+	local function scanObj(obj)
+		for name, val in pairs(obj:GetAttributes()) do
+			if typeof(val) == "number" and isStat(name) then
+				local m = maxFor(obj, name, val)
+				if val < m then obj:SetAttribute(name, m) end
+			end
+		end
+		for _, c in ipairs(obj:GetChildren()) do
+			local v = numOf(c)
+			if v and isStat(c.Name) then
+				local m = maxFor(obj, c.Name, v)
+				if v < m then c.Value = m end
+			end
+		end
+	end
+	local acc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		if not (S.infStamina or S.infFood) then return end
+		acc += dt
+		if acc < 0.15 then return end
+		acc = 0
+		scanObj(player)
+		local char, hum = getChar(), getHum()
+		if char then scanObj(char) end
+		if hum then scanObj(hum) end
+		for _, c in ipairs(player:GetChildren()) do
+			if c:IsA("Folder") then scanObj(c) end
+		end
+		if char then
+			for _, c in ipairs(char:GetChildren()) do
+				if c:IsA("Folder") then scanObj(c) end
+			end
+		end
+	end)
+
+	-- ProximityPrompt: aninda etkilesim + uzaktan etkilesim
+	local promptOrig = {}
+	local function applyPrompt(p)
+		if not p:IsA("ProximityPrompt") then return end
+		if not promptOrig[p] then
+			promptOrig[p] = { p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight }
+		end
+		local o = promptOrig[p]
+		if S.fastPrompt then p.HoldDuration = 0 end
+		local mult = S.farPrompt and S.promptMult or 1
+		if S.doorReach then
+			local a = p
+			while a and a ~= workspace do
+				if listHas(S.entDoors, a.Name) then
+					mult = math.max(mult, S.promptMult)
+					break
+				end
+				a = a.Parent
+			end
+		end
+		if mult > 1 then p.MaxActivationDistance = o[2] * mult end
+		if S.farPrompt or S.promptClip or mult > 1 then p.RequiresLineOfSight = false end
+	end
+	local promptScan = 0
+	function X.refreshPrompts()
+		promptScan += 1
+		local id = promptScan
+		for p, o in pairs(promptOrig) do
+			if p.Parent then
+				p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight = o[1], o[2], o[3]
+			end
+		end
+		table.clear(promptOrig)
+		if not (S.fastPrompt or S.farPrompt or S.promptClip or S.doorReach) then return end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if id ~= promptScan then return end
+				if d:IsA("ProximityPrompt") then applyPrompt(d) end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	end
+	X.onAdded(function(d)
+		if (S.fastPrompt or S.farPrompt or S.promptClip or S.doorReach) and d:IsA("ProximityPrompt") then applyPrompt(d) end
+	end)
+
+	player.Idled:Connect(function()
+		if S.antiAfk then
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new())
+			end)
+		end
+	end)
+end
+
+-- crosshair + FPS/ping gostergesi
+X.crossH = new("Frame", { Size = UDim2.fromOffset(14, 2), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	BackgroundColor3 = Color3.new(1, 0.2, 0.2), BorderSizePixel = 0, Visible = false, NoBind = true }, gui)
+X.crossV = new("Frame", { Size = UDim2.fromOffset(2, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	BackgroundColor3 = Color3.new(1, 0.2, 0.2), BorderSizePixel = 0, Visible = false, NoBind = true }, gui)
+X.stats = new("TextLabel", { Size = UDim2.fromOffset(170, 20), Position = UDim2.fromOffset(60, 8), BackgroundTransparency = 1,
+	TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.4, Font = Enum.Font.Code, TextSize = 14,
+	TextXAlignment = Enum.TextXAlignment.Left, Visible = false, NoBind = true }, gui)
+
+local pPlayer = createTab("Oyuncu", "👤")
+local pMove = createTab("Hareket", "🏃")
+local pTp = createTab("Işınlan", "📍")
+local pItem = createTab("Eşya", "🎒")
+local pExp = createTab("Explorer", "🗂", true)
+local pDoor = createTab("Kapılar", "🚪")
+local pDepo = createTab("Depo", "📦")
+local pLog = createTab("Sunucu", "📡", true)
+local pVis = createTab("Görsel", "👁")
+local pSet = createTab("Ayarlar", "⚙")
+
+-- OYUNCU
+addSection(pPlayer, "Can")
+addButton(pPlayer, "❤  Canı doldur (local)", function()
+	local h = getHum()
+	if h then h.Health = h.MaxHealth; notify("Can dolduruldu", "ok") end
+end)
+addButton(pPlayer, "✨  Revive (öldüğüm yerde yeniden doğ)", function()
+	local h, r = getHum(), getRoot()
+	if h and h.Health > 0 and r then
+		lastDeathCF = r.CFrame
+		pendingRevive = true
+		h.Health = 0
+		notify("Yeniden doğuyorsun, aynı yere dönülecek", "info")
+	else
+		pendingRevive = true
+		notify("Bir sonraki doğuşta öldüğün yere ışınlanacaksın", "info")
+	end
+end, "accent")
+addToggle(pPlayer, "Ölünce hep öldüğüm yerde doğ", true, function(v) S.respawnAtDeath = v end, "respawnAtDeath")
+addButton(pPlayer, "🔄  Karakteri sıfırla", function()
+	local h = getHum()
+	if h then h.Health = 0 end
+end)
+addSection(pPlayer, "Statlar")
+addToggle(pPlayer, "Hız aktif", false, function(v) S.speedOn = v end, "speedOn")
+addSlider(pPlayer, "Hız", 0, 300, S.speed, function(v) S.speed = v end, 1, "speed")
+do
+	local modes = { "WalkSpeed", "Velocity", "CFrame" }
+	local modeBtn
+	local function setMode(m)
+		S.speedMode = m
+		if modeBtn then modeBtn.Text = "Hız modu: " .. m .. "  (tıkla değiştir)" end
+	end
+	modeBtn = addButton(pPlayer, "", function()
+		setMode(modes[((table.find(modes, S.speedMode) or 1) % #modes) + 1])
+		markDirty()
+	end)
+	setMode(S.speedMode)
+	registry.speedMode = { default = "WalkSpeed", cb = function() end, get = function() return S.speedMode end, set = setMode }
+end
+addToggle(pPlayer, "Yumuşak hızlanma (geri atmayı azaltır)", true, function(v) S.speedRamp = v end, "speedRamp")
+addSlider(pPlayer, "Hızlanma (stud/sn²)", 10, 600, S.rampRate, function(v) S.rampRate = v end, 10, "rampRate")
+addToggle(pPlayer, "Anti geri-atma (hız/fly açıkken)", true, function(v) S.antiRubber = v end, "antiRubber")
+addToggle(pPlayer, "Zıplama aktif", false, function(v) S.jumpOn = v end, "jumpOn")
+addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end, 1, "jump")
+addToggle(pPlayer, "Sonsuz zıplama", false, function(v) S.infJump = v end, "infJump")
+addToggle(pPlayer, "Anti-Void (düşünce geri çek)", true, function(v) S.antiVoid = v end, "antiVoid")
+addToggle(pPlayer, "God mode (local can kilidi)", false, function(v) S.godMode = v end, "godMode")
+addToggle(pPlayer, "Otomatik can yenileme", false, function(v) S.autoHeal = v end, "autoHeal")
+addSlider(pPlayer, "Yenileme aralığı (sn)", 0.05, 2, S.healInterval, function(v) S.healInterval = v end, 0.05, "healInterval")
+task.spawn(function()
+	while true do
+		task.wait(S.healInterval)
+		if S.autoHeal then
+			local h = getHum()
+			if h and h.Health > 0 and h.Health < h.MaxHealth then h.Health = h.MaxHealth end
+		end
+	end
+end)
+addSection(pPlayer, "Yaratık koruması")
+addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", true, function(v)
+	S.noEntDmg = v
+	if not v then X.restoreEntDmg() end
+end, "noEntDmg")
+addToggle(pPlayer, "Yaratık yaklaşınca güvenli noktaya kaç", false, function(v) S.flee = v end, "flee")
+addSlider(pPlayer, "Kaçış mesafesi (stud)", 5, 100, S.fleeDist, function(v) S.fleeDist = v end, 1, "fleeDist")
+addToggle(pPlayer, "Bakınca hasar veren yaratık: kamerayı yere çevir", false, function(v) S.lookGuard = v end, "lookGuard")
+addToggle(pPlayer, "Bakınca hasar veren yaratık: yerelde gizle", false, function(v)
+	S.hideLook = v
+	if not v then X.restoreLook() end
+end, "hideLook")
+addTextBox(pPlayer, "Bakılmayacak:", S.lookNames, function(t) S.lookNames = t end, "lookNames")
+addSlider(pPlayer, "Bakma koruması menzili (stud)", 20, 600, S.lookRange, function(v) S.lookRange = v end, 10, "lookRange")
+addToggle(pPlayer, "Yaratık dokunmadan ~1 sn önce uzağa fırlat, sonra geri koy", false, function(v) S.dodge = v end, "dodge")
+addSlider(pPlayer, "Tahmin süresi (sn)", 0.3, 3, S.dodgeTime, function(v) S.dodgeTime = v end, 0.1, "dodgeTime")
+addSlider(pPlayer, "Her zaman tetik mesafesi (stud)", 5, 60, S.dodgeMin, function(v) S.dodgeMin = v end, 1, "dodgeMin")
+addSlider(pPlayer, "Fırlatma yüksekliği (stud)", 100, 3000, S.dodgeFar, function(v) S.dodgeFar = v end, 50, "dodgeFar")
+addSlider(pPlayer, "En az kalma süresi (sn)", 0.3, 5, S.dodgeStay, function(v) S.dodgeStay = v end, 0.1, "dodgeStay")
+addSlider(pPlayer, "Geri dönmek için yaratık uzaklığı", 10, 150, S.dodgeBack, function(v) S.dodgeBack = v end, 5, "dodgeBack")
+addButton(pPlayer, "📌  Güvenli nokta kaydet (şu anki konum)", function()
+	local r = getRoot()
+	if r then X.safeCF = r.CFrame; notify("Güvenli nokta kaydedildi", "ok") end
+end)
+addSection(pPlayer, "Enerji / Etkileşim")
+addToggle(pPlayer, "Sonsuz stamina / enerji", false, function(v) S.infStamina = v end, "infStamina")
+addTextBox(pPlayer, "İsimler:", S.staminaNames, function(t) S.staminaNames = t end, "staminaNames")
+addToggle(pPlayer, "Yemek / su barını hep full tut", false, function(v) S.infFood = v end, "infFood")
+addTextBox(pPlayer, "Yemek adı:", S.foodNames, function(t) S.foodNames = t end, "foodNames")
+addToggle(pPlayer, "Anında etkileşim (basılı tutma yok)", false, function(v)
+	S.fastPrompt = v
+	X.refreshPrompts()
+end, "fastPrompt")
+addToggle(pPlayer, "Etkileşim mesafesi çarpanı", false, function(v)
+	S.farPrompt = v
+	X.refreshPrompts()
+end, "farPrompt")
+addSlider(pPlayer, "Menzil çarpanı", 1, 10, S.promptMult, function(v)
+	S.promptMult = v
+	if S.farPrompt or S.doorReach then X.refreshPrompts() end
+end, 0.5, "promptMult")
+addToggle(pPlayer, "Door Reach (kapıları uzaktan aç)", false, function(v)
+	S.doorReach = v
+	X.refreshPrompts()
+end, "doorReach")
+addToggle(pPlayer, "Prompt Clip (duvardan etkileşim)", false, function(v)
+	S.promptClip = v
+	X.refreshPrompts()
+end, "promptClip")
+addToggle(pPlayer, "Anti-AFK", true, function(v) S.antiAfk = v end, "antiAfk")
+
+-- HAREKET
+addSection(pMove, "Fly  (F)")
+local setFly = addToggle(pMove, "Fly", false, function(v)
+	S.flyOn = v
+	if not v then stopFly() end
+end, "flyOn")
+addSlider(pMove, "Fly hızı", 10, 400, S.flySpeed, function(v) S.flySpeed = v end, 1, "flySpeed")
+addSection(pMove, "NoClip  (N)")
+local setNoclip = addToggle(pMove, "NoClip (havada asılı kalır)", false, function(v) S.noclip = v end, "noclip")
+addSlider(pMove, "NoClip yukarı/aşağı hız", 10, 200, S.noclipVert, function(v) S.noclipVert = v end, 1, "noclipVert")
+addSection(pMove, "Fizik")
+addToggle(pMove, "Yerçekimi aktif", false, function(v)
+	S.gravityOn = v
+	if not v then workspace.Gravity = DEFAULT_GRAVITY end
+end, "gravityOn")
+addSlider(pMove, "Yerçekimi", 0, 400, S.gravity, function(v) S.gravity = v end, 1, "gravity")
+addToggle(pMove, "Kaygan zemini kaldır (buz vs.)", false, function(v)
+	S.antiSlip = v
+	if not v then X.restoreSlip() end
+end, "antiSlip")
+addToggle(pMove, "Zıplamayı etkinleştir (kapalıysa aç)", false, function(v) S.enableJump = v end, "enableJump")
+addToggle(pMove, "İvmeyi kaldır (durunca hemen dur)", false, function(v) S.noAccel = v end, "noAccel")
+addToggle(pMove, "Öldüren blokların dokunması kapalı", true, function(v)
+	S.noTouch = v
+	X.refreshKill()
+end, "noTouch")
+addTextBox(pMove, "Kill blok:", S.killNames, function(t) S.killNames = t; X.refreshKill() end, "killNames")
+addToggle(pMove, "Karakter hitbox'ı kapalı (hiçbir şey dokunamaz)", false, function(v)
+	S.charNoTouch = v
+	if not v then X.restoreEntDmg() end
+end, "charNoTouch")
+addSection(pMove, "Tıkla ışınlan")
+addToggle(pMove, "Click TP (CTRL + tıkla)", false, function(v) S.clickTP = v end, "clickTP")
+
+-- ISINLAN
+addSection(pTp, "Oyuncular")
+local playerListBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pTp)
+new("UIListLayout", { Padding = UDim.new(0, 5) }, playerListBox)
+
+local function miniBtn(parent, text, x, cb)
+	local b = new("TextButton", {
+		Size = UDim2.fromOffset(52, 26), Position = UDim2.new(1, x, 0.5, -13), BackgroundColor3 = T.bg,
+		Text = text, TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false,
+	}, parent)
+	round(b, 6)
+	b.MouseEnter:Connect(function() tween(b, 0.1, { BackgroundColor3 = T.accent }) end)
+	b.MouseLeave:Connect(function() tween(b, 0.1, { BackgroundColor3 = T.bg }) end)
+	b.MouseButton1Click:Connect(cb)
+end
+
+local function refreshPlayers()
+	for _, c in ipairs(playerListBox:GetChildren()) do
+		if c:IsA("Frame") then c:Destroy() end
+	end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player then
+			local r = row(playerListBox, 40)
+			new("TextLabel", {
+				Size = UDim2.new(1, -130, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
+				Text = plr.DisplayName .. "  <font color='#8a8fb0'>@" .. plr.Name .. "</font>", RichText = true,
+				TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+			}, r)
+			miniBtn(r, "Git", -118, function()
+				local tr = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+				if tr then teleportTo(tr.CFrame * CFrame.new(0, 0, 4)); notify(plr.Name .. " yanına gidildi", "ok") end
+			end)
+			miniBtn(r, "İzle", -60, function()
+				local h = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+				if h then camera.CameraSubject = h; notify(plr.Name .. " izleniyor", "info") end
+			end)
+		end
+	end
+end
+Players.PlayerAdded:Connect(refreshPlayers)
+Players.PlayerRemoving:Connect(function() task.defer(refreshPlayers) end)
+refreshPlayers()
+
+addButton(pTp, "👁  İzlemeyi bırak", function()
+	local h = getHum()
+	if h then camera.CameraSubject = h end
+end)
+addSection(pTp, "Konumlar")
+local savedCF
+addButton(pTp, "💾  Konumu kaydet", function()
+	local r = getRoot()
+	if r then savedCF = r.CFrame; notify("Konum kaydedildi", "ok") end
+end)
+addButton(pTp, "↩  Kayıtlı konuma git", function()
+	if savedCF then teleportTo(savedCF) else notify("Kayıtlı konum yok", "warn") end
+end)
+addButton(pTp, "🏁  Spawn noktasına git", function()
+	local sp = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+	if sp then teleportTo(sp.CFrame + Vector3.new(0, 5, 0)) else notify("SpawnLocation bulunamadı", "warn") end
+end)
+
+-- WAYPOINT LISTESI
+addSection(pTp, "Waypoint listesi")
+do
+	local wpBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pTp)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, wpBox)
+	local n = 0
+	addButton(pTp, "➕  Waypoint ekle (şu anki konum)", function()
+		local r = getRoot()
+		if not r then return end
+		n += 1
+		local cf = r.CFrame
+		local rw = row(wpBox, 36)
+		new("TextLabel", {
+			Size = UDim2.new(1, -130, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = "WP " .. n,
+			TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+		}, rw)
+		miniBtn(rw, "Git", -118, function() teleportTo(cf) end)
+		miniBtn(rw, "Sil", -60, function() rw:Destroy() end)
+	end)
+end
+
+-- EXPLORER: oyunun dosya agacini gez, incele, ozellik oku (hepsi yerel)
+do
+	local SERVICES = { "Workspace", "ReplicatedStorage", "Lighting", "StarterGui", "StarterPack", "Players", "ReplicatedFirst", "SoundService", "Teams", "game" }
+	local rootIdx, selected, searchResults, searching = 1, nil, nil, false
+	local expanded, rowMap, hlMap, hideOrig, colOrig = {}, {}, {}, {}, {}
+
+	local function svc(name)
+		if name == "game" then return game end
+		local ok, s = pcall(game.GetService, game, name)
+		return ok and s or nil
+	end
+	local function esc(s)
+		s = s:gsub("&", "&amp;")
+		s = s:gsub("<", "&lt;")
+		s = s:gsub(">", "&gt;")
+		return s
+	end
+	local function posOf(inst)
+		if inst:IsA("BasePart") then return inst.Position end
+		if inst:IsA("Model") then return inst:GetPivot().Position end
+		if inst:IsA("Attachment") then return inst.WorldPosition end
+		local p = inst:FindFirstChildWhichIsA("BasePart", true)
+		return p and p.Position
+	end
+	local function partsOf(inst)
+		local list = {}
+		if inst:IsA("BasePart") then list[1] = inst end
+		for _, d in ipairs(inst:GetDescendants()) do
+			if d:IsA("BasePart") then list[#list + 1] = d end
+		end
+		return list
+	end
+	local function fv(v)
+		local t = typeof(v)
+		if t == "Vector3" then return string.format("%.1f, %.1f, %.1f", v.X, v.Y, v.Z) end
+		if t == "number" then return string.format("%.4g", v) end
+		if t == "Instance" then return v:GetFullName() end
+		return tostring(v)
+	end
+
+	local function describe(inst)
+		local L = {
+			"Ad: " .. inst.Name, "Sınıf: " .. inst.ClassName, "Yol: " .. inst:GetFullName(), "Çocuk: " .. #inst:GetChildren(),
+		}
+		local function add(name)
+			local ok, v = pcall(function() return inst[name] end)
+			if ok and v ~= nil then L[#L + 1] = name .. ": " .. fv(v) end
+		end
+		local function addAll(names) for _, n in ipairs(names) do add(n) end end
+		if inst:IsA("BasePart") then
+			addAll({ "Position", "Size", "Anchored", "CanCollide", "CanTouch", "Transparency", "Material" })
+		elseif inst:IsA("Model") then
+			L[#L + 1] = "Konum: " .. fv(inst:GetPivot().Position)
+			add("PrimaryPart")
+		elseif inst:IsA("Humanoid") then
+			addAll({ "Health", "MaxHealth", "WalkSpeed", "JumpPower" })
+		elseif inst:IsA("ValueBase") then
+			add("Value")
+		elseif inst:IsA("ProximityPrompt") then
+			addAll({ "ActionText", "ObjectText", "HoldDuration", "MaxActivationDistance", "Enabled" })
+		elseif inst:IsA("ClickDetector") then
+			add("MaxActivationDistance")
+		elseif inst:IsA("Sound") then
+			addAll({ "SoundId", "Volume", "Playing" })
+		elseif inst:IsA("GuiObject") then
+			addAll({ "Visible", "Text" })
+		elseif inst:IsA("Tool") then
+			addAll({ "CanBeDropped", "RequiresHandle" })
+		end
+		for k, v in pairs(inst:GetAttributes()) do L[#L + 1] = "@" .. k .. ": " .. fv(v) end
+		return table.concat(L, "\n")
+	end
+
+	------------------------------------------------------------------ arayuz
+	local rootBtn = new("TextButton", {
+		Size = UDim2.fromOffset(150, 30), BackgroundColor3 = T.card, TextColor3 = T.text, Font = Enum.Font.GothamMedium,
+		TextSize = 12, AutoButtonColor = false, Text = "",
+	}, pExp)
+	round(rootBtn, 6)
+	local searchBox = new("TextBox", {
+		Size = UDim2.new(1, -234, 0, 30), Position = UDim2.fromOffset(156, 0), BackgroundColor3 = T.card, TextColor3 = T.text,
+		PlaceholderText = "isim ara (Enter)", PlaceholderColor3 = T.sub, Text = "", Font = Enum.Font.Code, TextSize = 12,
+		ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pExp)
+	round(searchBox, 6)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
+	local refreshBtn = new("TextButton", {
+		Size = UDim2.fromOffset(72, 30), Position = UDim2.new(1, -72, 0, 0), BackgroundColor3 = T.accent, TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false, Text = "🔄 Yenile",
+	}, pExp)
+	round(refreshBtn, 6)
+
+	local tree = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 0, 170), Position = UDim2.fromOffset(0, 36), BackgroundColor3 = T.bg, BorderSizePixel = 0,
+		ScrollBarThickness = 4, ScrollBarImageColor3 = T.stroke, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	}, pExp)
+	round(tree, 8)
+	stroke(tree)
+	new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, tree)
+
+	local infoBox = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 0, 84), Position = UDim2.fromOffset(0, 212), BackgroundColor3 = T.card, BorderSizePixel = 0,
+		ScrollBarThickness = 3, ScrollBarImageColor3 = T.stroke, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	}, pExp)
+	round(infoBox, 8)
+	local infoLbl = new("TextLabel", {
+		Size = UDim2.new(1, -12, 0, 0), Position = UDim2.fromOffset(8, 4), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		TextWrapped = true, TextColor3 = T.text, Font = Enum.Font.Code, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top, Text = "Bir öğe seç.",
+	}, infoBox)
+
+	local btnGrid = new("Frame", { Size = UDim2.new(1, 0, 1, -302), Position = UDim2.fromOffset(0, 302), BackgroundTransparency = 1 }, pExp)
+	new("UIGridLayout", { CellSize = UDim2.new(0.25, -4, 0, 32), CellPadding = UDim2.fromOffset(4, 4) }, btnGrid)
+
+	------------------------------------------------------------------ agac
+	local rebuild
+	local function select(inst)
+		local prev = selected
+		selected = inst
+		if prev and rowMap[prev] then rowMap[prev].BackgroundTransparency = 1 end
+		if inst and rowMap[inst] then rowMap[inst].BackgroundTransparency = 0.5 end
+		infoLbl.Text = inst and describe(inst) or "Bir öğe seç."
+	end
+
+	local function flatten(inst, depth, out)
+		local kids = inst:GetChildren()
+		table.sort(kids, function(a, b) return a.Name:lower() < b.Name:lower() end)
+		for i, c in ipairs(kids) do
+			if #out > 400 then return end
+			if i > 150 then
+				out[#out + 1] = { more = #kids - 150, depth = depth }
+				break
+			end
+			out[#out + 1] = { inst = c, depth = depth }
+			if expanded[c] then flatten(c, depth + 1, out) end
+		end
+	end
+
+	function rebuild()
+		for _, c in ipairs(tree:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(rowMap)
+		local out = {}
+		if searchResults then
+			for _, inst in ipairs(searchResults) do out[#out + 1] = { inst = inst, depth = 0, path = true } end
+		else
+			local r = svc(SERVICES[rootIdx])
+			if r then flatten(r, 0, out) end
+		end
+		rootBtn.Text = searchResults and ("Arama: " .. #searchResults) or ("Kök: " .. SERVICES[rootIdx] .. " ▾")
+		for i, e in ipairs(out) do
+			local b = new("TextButton", {
+				Size = UDim2.new(1, -6, 0, 20), BackgroundColor3 = T.accent, BackgroundTransparency = 1, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+			}, tree)
+			local indent = e.depth * 14
+			if e.more then
+				new("TextLabel", {
+					Size = UDim2.new(1, -indent - 20, 1, 0), Position = UDim2.fromOffset(indent + 20, 0), BackgroundTransparency = 1,
+					Text = "… " .. e.more .. " öğe daha", TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, b)
+			else
+				local inst = e.inst
+				rowMap[inst] = b
+				if inst == selected then b.BackgroundTransparency = 0.5 end
+				local hasKids = #inst:GetChildren() > 0
+				if hasKids and not e.path then
+					local arrow = new("TextButton", {
+						Size = UDim2.fromOffset(18, 20), Position = UDim2.fromOffset(indent, 0), BackgroundTransparency = 1,
+						Text = expanded[inst] and "▾" or "▸", TextColor3 = T.sub, Font = Enum.Font.GothamBold, TextSize = 12,
+					}, b)
+					arrow.MouseButton1Click:Connect(function()
+						expanded[inst] = not expanded[inst] or nil
+						rebuild()
+					end)
+				end
+				local label = esc(inst.Name) .. "  <font color='#" .. T.sub:ToHex() .. "' size='10'>"
+					.. inst.ClassName .. (e.path and ("  " .. esc(inst:GetFullName())) or "") .. "</font>"
+				new("TextLabel", {
+					Size = UDim2.new(1, -indent - 20, 1, 0), Position = UDim2.fromOffset(indent + 20, 0), BackgroundTransparency = 1,
+					RichText = true, Text = label, TextColor3 = T.text, Font = Enum.Font.Gotham, TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+				}, b)
+				b.MouseButton1Click:Connect(function() select(inst) end)
+			end
+		end
+	end
+
+	rootBtn.MouseButton1Click:Connect(function()
+		rootIdx = rootIdx % #SERVICES + 1
+		searchResults = nil
+		rebuild()
+	end)
+	refreshBtn.MouseButton1Click:Connect(function()
+		rebuild()
+		if selected and selected.Parent then select(selected) end
+	end)
+	searchBox.FocusLost:Connect(function()
+		local q = searchBox.Text:lower()
+		if q == "" then
+			searchResults = nil
+			rebuild()
+			return
+		end
+		if searching then return end
+		searching = true
+		task.spawn(function()
+			local res, n = {}, 0
+			local r = svc(SERVICES[rootIdx])
+			if r then
+				for _, d in ipairs(r:GetDescendants()) do
+					if d.Name:lower():find(q, 1, true) then
+						res[#res + 1] = d
+						if #res >= 200 then break end
+					end
+					n += 1
+					if n % 3000 == 0 then task.wait() end
+				end
+			end
+			searchResults = res
+			searching = false
+			rebuild()
+		end)
+	end)
+
+	------------------------------------------------------------------ eylemler
+	local function actBtn(text, cb)
+		local b = new("TextButton", {
+			BackgroundColor3 = T.card, Text = text, TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 11, AutoButtonColor = false,
+		}, btnGrid)
+		round(b, 6)
+		stroke(b)
+		b.MouseButton1Click:Connect(function()
+			if not selected or not selected.Parent then notify("Önce bir öğe seç", "warn") return end
+			cb(selected)
+		end)
+	end
+
+	actBtn("📍 Git", function(inst)
+		local p = posOf(inst)
+		if p then teleportTo(CFrame.new(p + Vector3.new(0, 4, 0))) else notify("Konumu yok", "warn") end
+	end)
+	actBtn("✨ Parlat", function(inst)
+		if hlMap[inst] then
+			hlMap[inst]:Destroy()
+			hlMap[inst] = nil
+		elseif inst:IsA("PVInstance") then
+			hlMap[inst] = new("Highlight", {
+				Adornee = inst, FillColor = T.accent, OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.5,
+				DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, NoBind = true,
+			}, gui)
+		else
+			notify("Bu tür parlatılamaz (Model / Part olmalı)", "warn")
+		end
+	end)
+	actBtn("👁 Gizle/Göster", function(inst)
+		local parts = partsOf(inst)
+		if #parts == 0 then notify("Part yok", "warn") return end
+		local hidden = hideOrig[inst]
+		if hidden then
+			for p, t in pairs(hidden) do
+				if p.Parent then p.Transparency = t end
+			end
+			hideOrig[inst] = nil
+		else
+			local map = {}
+			for _, p in ipairs(parts) do
+				map[p] = p.Transparency
+				p.Transparency = 1
+			end
+			hideOrig[inst] = map
+		end
+	end)
+	actBtn("🚧 Çarpışma", function(inst)
+		local parts = partsOf(inst)
+		if #parts == 0 then notify("Part yok", "warn") return end
+		local orig = colOrig[inst]
+		if orig then
+			for p, c in pairs(orig) do
+				if p.Parent then p.CanCollide = c end
+			end
+			colOrig[inst] = nil
+		else
+			local map = {}
+			for _, p in ipairs(parts) do
+				map[p] = p.CanCollide
+				p.CanCollide = false
+			end
+			colOrig[inst] = map
+		end
+	end)
+	actBtn("📋 Yolu kopyala", function(inst)
+		local path = inst:GetFullName()
+		if typeof(setclipboard) == "function" then
+			setclipboard(path)
+			notify("Yol kopyalandı", "ok")
+		else
+			searchBox.Text = path
+			notify("setclipboard yok: yol arama kutusuna yazıldı, oradan kopyala", "info")
+		end
+	end)
+	actBtn("🗑 Yerelde sil", function(inst)
+		local char = player.Character
+		if inst.Parent == game or inst == char or (char and inst:IsAncestorOf(char)) or inst:IsAncestorOf(gui)
+			or inst == workspace.CurrentCamera or inst:IsDescendantOf(player) then
+			notify("Bu öğe silinemez (servis / karakter / panel)", "bad")
+			return
+		end
+		inst:Destroy()
+		select(nil)
+		rebuild()
+		notify("Yerelde silindi (sunucuda durur)", "ok")
+	end)
+	actBtn("🎒 Çantaya ver", function(inst)
+		if not inst:IsA("Tool") then notify("Sadece Tool verilebilir", "warn") return end
+		local bp = player:FindFirstChildOfClass("Backpack")
+		if bp then
+			inst:Clone().Parent = bp
+			notify(inst.Name .. " çantana eklendi (yerel)", "ok")
+		end
+	end)
+	actBtn("⚡ Tetikle", function(inst)
+		if inst:IsA("ProximityPrompt") then
+			pcall(function()
+				if typeof(fireproximityprompt) == "function" then
+					fireproximityprompt(inst)
+				else
+					inst:InputHoldBegin()
+					task.wait(inst.HoldDuration + 0.1)
+					inst:InputHoldEnd()
+				end
+			end)
+		elseif inst:IsA("ClickDetector") and typeof(fireclickdetector) == "function" then
+			pcall(fireclickdetector, inst)
+		else
+			notify("ProximityPrompt veya ClickDetector seç", "warn")
+		end
+	end)
+
+	rebuild()
+end
+
+-- BYPASS: bilinen oyun nesnelerinin dokunmasini / carpismasini kapat (hepsi yerel)
+do
+	local function eachPart(obj, fn)
+		if obj:IsA("BasePart") then fn(obj) end
+		for _, d in ipairs(obj:GetDescendants()) do
+			if d:IsA("BasePart") then fn(d) end
+		end
+	end
+	local function touch(o, on) eachPart(o, function(p) p.CanTouch = not on end) end
+
+	local ORDER = {
+		"bpGiggle", "bpDupe", "bpGloom", "bpSeekObs", "bpVacuum", "bpLava", "bpScary", "bpSnare", "bpBanana", "bpJeff",
+		"bpWater", "bpAlma", "bpDrones", "bpScribbles",
+	}
+	local DEFS = {
+		bpGiggle = { text = "Bypass Giggle (GiggleCeiling)", names = { "GiggleCeiling" }, apply = function(o, on)
+			local h = o:FindFirstChild("Hitbox")
+			if h then h.CanTouch = not on end
+		end },
+		bpDupe = { text = "Bypass Dupe (sahte kapılar)", names = { "DoorFake", "FakeDoor" }, apply = function(o, on)
+			local h = o:FindFirstChild("Hidden")
+			if h then h.CanTouch = not on end
+			local lock = o:FindFirstChild("Lock")
+			local up = lock and lock:FindFirstChild("UnlockPrompt")
+			if up then up.Enabled = not on end
+		end },
+		bpGloom = { text = "Bypass Gloombat yumurtaları", names = { "GloombatEgg", "GloomEgg" }, apply = touch },
+		bpSeekObs = { text = "Bypass Seek engelleri", names = { "SeekFloodline", "Seek_Arm", "Seek_Hand", "ChandelierObstruction", "SeekObstruction" },
+			apply = function(o, on)
+				touch(o, on)
+				if o.Name == "SeekFloodline" then eachPart(o, function(p) p.CanCollide = on end) end
+			end },
+		bpVacuum = { text = "Bypass Vacuum (SideroomSpace)", names = { "SideroomSpace" }, apply = function(o, on)
+			local c = o:FindFirstChild("Collision")
+			if c then
+				c.CanCollide = on
+				c.CanTouch = not on
+			end
+		end },
+		bpLava = { text = "Bypass Killbricks (Lava)", names = { "Lava" }, apply = touch },
+		bpScary = { text = "Bypass Seeking Wall (ScaryWall)", names = { "ScaryWall" }, apply = function(o, on)
+			eachPart(o, function(p)
+				p.CanTouch = not on
+				p.CanCollide = not on
+			end)
+		end },
+		bpSnare = { text = "Bypass Snare", names = { "Snare" }, apply = touch },
+		bpBanana = { text = "Bypass Banana Peel", names = { "BananaPeel" }, apply = touch },
+		bpJeff = { text = "Bypass Jeff the Killer", names = { "JeffTheKiller" }, apply = function(o, on)
+			eachPart(o, function(p)
+				p.CanCollide = not on
+				p.CanTouch = not on
+			end)
+			local h = o:FindFirstChildOfClass("Humanoid")
+			if on and h then h.Health = 0 end
+		end },
+	}
+	-- Archives
+	DEFS.bpWater = { text = "Bypass Electric Water", names = { "ElectricWater", "Electric_Water" }, apply = touch }
+	DEFS.bpAlma = { text = "Bypass Alma (doğmasını engelle)", names = { "Alma", "AlmaMoving" }, apply = function(o, on)
+		if on then o:Destroy() end
+	end }
+	DEFS.bpDrones = { text = "Bypass Drones", names = { "DronesStampede", "Drones", "Drone" }, apply = touch }
+	DEFS.bpScribbles = { text = "Bypass Scribbles", names = { "Scribbles" }, apply = touch }
+
+	-- Remove: doğmasını engelle (model oluşunca yerelde silinir)
+	local function removeDef(text, names)
+		return { text = text, names = names, apply = function(o, on) if on then o:Destroy() end end }
+	end
+	DEFS.rmScreech = removeDef("Remove Screech", { "Screech" })
+	DEFS.rmHalt = removeDef("Remove Halt", { "Halt", "Shade" })
+	DEFS.rmA90 = removeDef("Remove A-90", { "A90", "A-90" })
+	DEFS.rmDread = removeDef("Remove Dread", { "Dread" })
+	DEFS.rmSurge = removeDef("Remove Surge", { "Surge" })
+	for _, k in ipairs({ "rmScreech", "rmHalt", "rmA90", "rmDread", "rmSurge" }) do table.insert(ORDER, k) end
+
+	local byName = {}
+	for key, def in pairs(DEFS) do
+		for _, n in ipairs(def.names) do
+			byName[n] = byName[n] or {}
+			table.insert(byName[n], key)
+		end
+	end
+
+	local function rescan(key)
+		local def = DEFS[key]
+		local lookup = {}
+		for _, n in ipairs(def.names) do lookup[n] = true end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if lookup[d.Name] then pcall(def.apply, d, S[key] and true or false) end
+				n += 1
+				if n % 2000 == 0 then task.wait() end
+			end
+		end)
+	end
+	X.onAdded(function(d)
+		local keys = byName[d.Name]
+		if keys then
+			for _, k in ipairs(keys) do
+				if S[k] then pcall(DEFS[k].apply, d, true) end
+			end
+		end
+	end)
+
+	addSection(pPlayer, "Bypass (tuzak / yaratık)")
+	for _, key in ipairs(ORDER) do
+		addToggle(pPlayer, DEFS[key].text, false, function(v)
+			S[key] = v
+			rescan(key)
+		end, key)
+	end
+
+	-- No ... Damage: gercek remote'u klasorden cikarip yerine ayni adli sahte remote koy (sunucuya hic ulasmaz)
+	local stash = {}
+	local function remotesFolder()
+		return ReplicatedStorage:FindFirstChild("RemotesFolder") or ReplicatedStorage:FindFirstChild("Remotes")
+	end
+	local function swapRemote(name, on)
+		local rf = remotesFolder()
+		if not rf then notify("RemotesFolder bulunamadı", "warn") return end
+		local rec = stash[name]
+		if on then
+			if rec then return end
+			local real = rf:FindFirstChild(name)
+			if not real then notify("'" .. name .. "' remote'u bulunamadı", "warn") return end
+			local fake = Instance.new(real.ClassName)
+			fake.Name = real.Name
+			stash[name] = { real = real, fake = fake }
+			real.Parent = nil
+			fake.Parent = rf
+		elseif rec then
+			rec.fake:Destroy()
+			rec.real.Parent = rf
+			stash[name] = nil
+		end
+	end
+	for _, d in ipairs({
+		{ "noScreechDmg", "No Screech Damage", "Screech" },
+		{ "noHaltDmg", "No Halt Damage", "Shade" },
+		{ "noA90Dmg", "No A-90 Damage", "A90" },
+		{ "noSurgeDmg", "No Surge Damage", "SurgeRemote" },
+	}) do
+		addToggle(pPlayer, d[2], false, function(v)
+			S[d[1]] = v
+			swapRemote(d[3], v)
+		end, d[1])
+	end
+
+	-- workspace'e dogrudan eklenen cop / fidye nesnelerini sil
+	addToggle(pPlayer, "Anti Closet Trash (Binder / Shoe / Shelf sil)", false, function(v) S.antiTrash = v end, "antiTrash")
+	addToggle(pPlayer, "Anti Ransom (Ransom sil)", false, function(v) S.antiRansom = v end, "antiRansom")
+	X.onAdded(function(d)
+		if d.Parent ~= workspace then return end
+		local n = d.Name
+		if S.antiTrash and (n:sub(1, 6) == "Binder" or n:sub(1, 4) == "Shoe" or n:sub(1, 5) == "Shelf") then
+			d:Destroy()
+		elseif S.antiRansom and n == "Ransom" then
+			d:Destroy()
+		end
+	end)
+
+	-- ForgetMeNot: yapistirdigin kodun sadece gorunen kismi (FireLookAts). Sonrasi kesik oldugu icin oda gecisi / void kismi yok.
+	local fmnDone = setmetatable({}, { __mode = "k" })
+	addToggle(pPlayer, "ForgetMeNot solver (LookAt gönder)", false, function(v)
+		S.fmn = v
+		if v then table.clear(fmnDone) end
+	end, "fmn")
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			local rooms = S.fmn and workspace:FindFirstChild("CurrentRooms")
+			if rooms then
+				for _, room in ipairs(rooms:GetChildren()) do
+					if not fmnDone[room] and room:FindFirstChild("ForgetMeNotVineDoors", true) then
+						fmnDone[room] = true
+						for i = 1, 6 do
+							local obj = room:FindFirstChild(tostring(i))
+							local la = obj and obj:FindFirstChild("LookAt")
+							if la and la:IsA("RemoteEvent") then pcall(function() la:FireServer() end) end
+						end
+						notify("ForgetMeNot: LookAt gönderildi (oda " .. room.Name .. ")", "ok")
+					end
+				end
+			end
+		end
+	end)
+
+	-- Eyes / Lookman: oyunun MotorReplication remote'una sahte bakis acisi gonder
+	addToggle(pPlayer, "Bypass Eyes (remote)", false, function(v) S.bpEyes = v end, "bpEyes")
+	addToggle(pPlayer, "Bypass Lookman (remote)", false, function(v) S.bpLookman = v end, "bpLookman")
+	addToggle(pPlayer, "Eyes/Lookman: eski kat varyantı (Fools / OldHotel)", false, function(v) S.bpOldFloor = v end, "bpOldFloor")
+	local function motorRemote()
+		local rf = ReplicatedStorage:FindFirstChild("RemotesFolder") or ReplicatedStorage:FindFirstChild("Remotes")
+		return rf and rf:FindFirstChild("MotorReplication")
+	end
+	local function present(names)
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and names[inst.Name] then return true end
+		end
+		return false
+	end
+	task.spawn(function()
+		local warned = false
+		while true do
+			task.wait(0.3)
+			local want = (S.bpEyes and present({ Eyes = true })) or (S.bpLookman and present({ Lookman = true, BackdoorLookman = true }))
+			if want then
+				local r = motorRemote()
+				if r then
+					pcall(function()
+						if S.bpOldFloor then r:FireServer(0, -65, 0, false) else r:FireServer(-650) end
+					end)
+				elseif not warned then
+					warned = true
+					notify("MotorReplication remote'u bulunamadı (ReplicatedStorage.RemotesFolder)", "warn")
+				end
+			end
+		end
+	end)
+end
+
+-- KAMERA / EFEKT / ESP RENKLERI / BILDIRIM / DEBUG (yerel ozellikler)
+do
+	local amb0, out0 = Lighting.Ambient, Lighting.OutdoorAmbient
+	local atmWas = false
+
+	------------------------------------------------------------ kamera
+	addSection(pVis, "Kamera / Ortam")
+	addToggle(pVis, "Ambient rengi", false, function(v)
+		S.ambientOn = v
+		if not v then Lighting.Ambient, Lighting.OutdoorAmbient = amb0, out0 end
+	end, "ambientOn")
+	addSlider(pVis, "Ambient R", 0, 255, S.ambR, function(v) S.ambR = v end, 1, "ambR")
+	addSlider(pVis, "Ambient G", 0, 255, S.ambG, function(v) S.ambG = v end, 1, "ambG")
+	addSlider(pVis, "Ambient B", 0, 255, S.ambB, function(v) S.ambB = v end, 1, "ambB")
+	addToggle(pVis, "Kamera sarsıntısını kaldır", false, function(v) S.noShake = v end, "noShake")
+	addToggle(pVis, "Üçüncü şahıs", false, function(v)
+		S.thirdPerson = v
+		if not v then
+			local c = getChar()
+			if c then
+				for _, p in ipairs(c:GetDescendants()) do
+					if p:IsA("BasePart") then p.LocalTransparencyModifier = 0 end
+				end
+			end
+		end
+	end, "thirdPerson")
+	addSlider(pVis, "3. şahıs X", -20, 20, S.tpX, function(v) S.tpX = v end, 0.5, "tpX")
+	addSlider(pVis, "3. şahıs Y", -20, 20, S.tpY, function(v) S.tpY = v end, 0.5, "tpY")
+	addSlider(pVis, "3. şahıs Z (geri)", 0, 60, S.tpZ, function(v) S.tpZ = v end, 0.5, "tpZ")
+	addToggle(pVis, "3. şahıs duvar kontrolü", true, function(v) S.tpWall = v end, "tpWall")
+
+	local rp = RaycastParams.new()
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	RunService:BindToRenderStep("HunterCam2", Enum.RenderPriority.Camera.Value + 2, function()
+		if S.ambientOn then
+			local c = Color3.fromRGB(S.ambR, S.ambG, S.ambB)
+			Lighting.Ambient, Lighting.OutdoorAmbient = c, c
+		end
+		local hum = getHum()
+		if S.noShake and hum and hum.CameraOffset ~= Vector3.zero then hum.CameraOffset = Vector3.zero end
+		local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+		if atm then
+			if S.noFog then
+				X.atm0 = X.atm0 or atm.Density
+				atm.Density = 0
+				atmWas = true
+			elseif atmWas then
+				atm.Density = X.atm0 or atm.Density
+				atmWas = false
+			end
+		end
+		if S.thirdPerson then
+			local cam, char = workspace.CurrentCamera, getChar()
+			if cam and char then
+				for _, p in ipairs(char:GetChildren()) do
+					if p:IsA("BasePart") then p.LocalTransparencyModifier = 0 end
+				end
+				local origin = cam.CFrame.Position
+				local want = (cam.CFrame * CFrame.new(S.tpX, S.tpY, S.tpZ)).Position
+				if S.tpWall then
+					rp.FilterDescendantsInstances = { char }
+					local hit = workspace:Raycast(origin, want - origin, rp)
+					if hit then
+						local back = origin - want
+						want = hit.Position + (back.Magnitude > 0.01 and back.Unit or Vector3.zero) * 0.5
+					end
+				end
+				cam.CFrame = CFrame.new(want) * (cam.CFrame - cam.CFrame.Position)
+			end
+		end
+	end)
+
+	------------------------------------------------------------ efektler
+	addSection(pVis, "Efektler")
+	local hsOrig, fxOrig = {}, {}
+	addToggle(pVis, "Saklanma yerlerini şeffaf yap", false, function(v)
+		S.hideSpotTrans = v
+		if not v then
+			for p, t in pairs(hsOrig) do
+				if p.Parent then p.Transparency = t end
+			end
+			table.clear(hsOrig)
+		end
+	end, "hideSpotTrans")
+	addSlider(pVis, "Şeffaflık", 0, 1, S.hideSpotAlpha, function(v) S.hideSpotAlpha = v end, 0.05, "hideSpotAlpha")
+	addToggle(pVis, "Jumpscare / vinyet / glitch efektlerini kapat", false, function(v)
+		S.fxOff = v
+		if not v then
+			for o, prop in pairs(fxOrig) do
+				if o.Parent then
+					if prop == "Enabled" then o.Enabled = true else o.Visible = true end
+				end
+			end
+			table.clear(fxOrig)
+		end
+	end, "fxOff")
+	addTextBox(pVis, "Efekt adları:", S.fxNames, function(t) S.fxNames = t end, "fxNames")
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if S.hideSpotTrans then
+				for inst, o in pairs(ents) do
+					if o.cat == "hide" and (o.dist or 1e9) < 150 and inst:IsDescendantOf(workspace) then
+						local function set(p)
+							if p:IsA("BasePart") then
+								if hsOrig[p] == nil then hsOrig[p] = p.Transparency end
+								p.Transparency = math.max(hsOrig[p], S.hideSpotAlpha)
+							end
+						end
+						set(inst)
+						for _, d in ipairs(inst:GetDescendants()) do set(d) end
+					end
+				end
+			end
+			if S.fxOff then
+				local pg = player:FindFirstChildOfClass("PlayerGui")
+				if pg then
+					for _, d in ipairs(pg:GetDescendants()) do
+						if listHas(S.fxNames, d.Name) and not d:IsDescendantOf(gui) then
+							if d:IsA("GuiObject") and d.Visible then
+								fxOrig[d] = "Visible"
+								d.Visible = false
+							elseif d:IsA("ScreenGui") and d.Enabled and d ~= gui then
+								fxOrig[d] = "Enabled"
+								d.Enabled = false
+							end
+						end
+					end
+				end
+				for _, e in ipairs(Lighting:GetChildren()) do
+					if (e:IsA("BlurEffect") or e:IsA("ColorCorrectionEffect") or e:IsA("BloomEffect") or e:IsA("SunRaysEffect"))
+						and e.Enabled and listHas(S.fxNames, e.Name) then
+						fxOrig[e] = "Enabled"
+						e.Enabled = false
+					end
+				end
+			end
+		end
+	end)
+
+	------------------------------------------------------------ ESP kategorileri + renkler
+	addSection(pVis, "ESP kategorileri")
+	for _, c in ipairs({
+		{ "espObj", "objWords", "Hedefler (Objectives)", "Hedef:" },
+		{ "espCur", "curWords", "Para / Currency", "Para:" },
+		{ "espLad", "ladWords", "Merdivenler", "Merdiven:" },
+		{ "espMisc", "miscWords", "Diğer (Misc)", "Diğer:" },
+	}) do
+		addToggle(pVis, c[3], false, function(v)
+			S[c[1]] = v
+			clearEntities()
+			X.refreshEnt()
+		end, c[1])
+		addTextBox(pVis, c[4], S[c[2]], function(t)
+			S[c[2]] = t
+			clearEntities()
+			X.refreshEnt()
+		end, c[2])
+	end
+	addSection(pVis, "ESP renkleri (tıkla, değişir)")
+	for _, c in ipairs({
+		{ "entity", "Varlıklar" }, { "door", "Kapılar" }, { "hide", "Saklanma yerleri" }, { "player", "Oyuncular" },
+		{ "chest", "Sandıklar" }, { "item", "Eşyalar" }, { "currency", "Para" }, { "ladder", "Merdivenler" },
+		{ "objective", "Hedefler" }, { "misc", "Diğer" },
+	}) do
+		local cat, label = c[1], c[2]
+		local btn
+		local function paint()
+			if btn then
+				local p = PAL[S.colIdx[cat] or 1]
+				btn.Text = "Renk: " .. label .. " = " .. p[1]
+				btn.TextColor3 = p[2]
+			end
+		end
+		btn = addButton(pVis, "", function()
+			S.colIdx[cat] = (S.colIdx[cat] % #PAL) + 1
+			paint()
+			clearEntities()
+			X.refreshEnt()
+			markDirty()
+		end)
+		paint()
+		local default = S.colIdx[cat]
+		registry["col_" .. cat] = {
+			default = default, cb = function() end, get = function() return S.colIdx[cat] end,
+			set = function(v) S.colIdx[cat] = math.clamp(math.floor(v), 1, #PAL); paint() end,
+		}
+	end
+
+	------------------------------------------------------------ bildirimler
+	addSection(pSet, "Bildirimler")
+	addToggle(pSet, "Varlıkları bildir", true, function(v) S.notifyEnt = v end, "notifyEnt")
+	addTextBox(pSet, "Bildirme:", S.entMute, function(t) S.entMute = t end, "entMute")
+	addToggle(pSet, "Yeni eşyaları bildir (mesafeli)", false, function(v) S.notifyItems = v end, "notifyItems")
+	addToggle(pSet, "Entity Chat (spawn olunca chat'e yaz)", false, function(v) S.entChat = v end, "entChat")
+	addToggle(pSet, "Bildirimleri uzun tut", false, function(v) S.keepNotif = v end, "keepNotif")
+	do
+		local styles = { "Standart", "Doors", "STX", "Library" }
+		local sbtn
+		local function setStyle(m)
+			S.notifyStyle = m
+			if sbtn then sbtn.Text = "Bildirim stili: " .. m .. "  (tıkla değiştir)" end
+		end
+		sbtn = addButton(pSet, "", function()
+			setStyle(styles[((table.find(styles, S.notifyStyle) or 1) % #styles) + 1])
+			markDirty()
+		end)
+		setStyle(S.notifyStyle)
+		registry.notifyStyle = { default = "Standart", cb = function() end, get = function() return S.notifyStyle end, set = setStyle }
+	end
+	addButton(pSet, "🔔  Test bildirimi", function()
+		notify("☠ Entity 'Rush' has spawned. Find a hiding spot. (test)", "bad", "test")
+		playAlert(true, true)
+	end)
+
+	------------------------------------------------------------ debug / ceşitli
+	addSection(pSet, "Debug / Çeşitli")
+	local function remotes()
+		return ReplicatedStorage:FindFirstChild("RemotesFolder") or ReplicatedStorage:FindFirstChild("Remotes")
+	end
+	local function fireNamed(names, label)
+		local rf = remotes()
+		if rf then
+			for _, n in ipairs(names) do
+				local r = rf:FindFirstChild(n)
+				if r and r:IsA("RemoteEvent") then
+					pcall(function() r:FireServer() end)
+					notify(label .. " gönderildi (" .. n .. ")", "ok")
+					return
+				end
+			end
+		end
+		notify(label .. ": uygun remote bulunamadı", "warn")
+	end
+	addButton(pSet, "🔁  Play Again", function() fireNamed({ "PlayAgain", "Replay", "PlayAgainRemote" }, "Play Again") end)
+	addButton(pSet, "🏠  Return to Lobby", function() fireNamed({ "Lobby", "ReturnToLobby", "ReturnLobby" }, "Lobby") end)
+	addButton(pSet, "🧭  Mevcut kat / oda", function()
+		local room = "?"
+		local rooms = workspace:FindFirstChild("CurrentRooms")
+		if rooms then
+			local best = -1
+			for _, r in ipairs(rooms:GetChildren()) do
+				best = math.max(best, tonumber(r.Name) or -1)
+			end
+			room = best >= 0 and tostring(best) or "?"
+		end
+		local floor = "?"
+		local gd = ReplicatedStorage:FindFirstChild("GameData")
+		local fv = gd and gd:FindFirstChild("Floor")
+		if fv and fv:IsA("ValueBase") then floor = tostring(fv.Value) end
+		notify("Kat: " .. floor .. "  •  Oda: " .. room, "info")
+	end)
+	addButton(pSet, "🕳  Void (-120)", function()
+		local r = getRoot()
+		if r then teleportTo(CFrame.new(r.Position.X, -120, r.Position.Z)) end
+	end)
+	addButton(pSet, "💀  Ölüm", function()
+		local h = getHum()
+		if h then h.Health = 0 end
+	end)
+
+	-- sonraki kapiya isinlan (kameranin baktigi yondeki en yakin gercek kapi)
+	local function tpNextDoor()
+		local root, cam = getRoot(), workspace.CurrentCamera
+		if not (root and cam) then return false end
+		local best, bd
+		for _, o in pairs(ents) do
+			if o.cat == "door" and not o.fake and o.part and o.part:IsDescendantOf(workspace) then
+				local v = o.part.Position - root.Position
+				local d = v.Magnitude
+				if d > 8 and d < 400 and v.Unit:Dot(cam.CFrame.LookVector) > 0.2 and (not bd or d < bd) then
+					best, bd = o, d
+				end
+			end
+		end
+		if not best then return false end
+		local away = (root.Position - best.part.Position) * Vector3.new(1, 0, 1)
+		away = away.Magnitude > 0.1 and away.Unit or Vector3.zAxis
+		teleportTo(CFrame.new(best.part.Position + away * 4 + Vector3.new(0, 3, 0)))
+		return true
+	end
+	addButton(pSet, "🚪  Sonraki kapıya ışınlan", function()
+		if not tpNextDoor() then notify("Önünde uygun kapı yok (Kapıları göster açık mı?)", "warn") end
+	end)
+	addToggle(pSet, "Otomatik sonraki kapıya ışınlan", false, function(v) S.autoTpDoor = v end, "autoTpDoor")
+	task.spawn(function()
+		while true do
+			task.wait(2)
+			if S.autoTpDoor then pcall(tpNextDoor) end
+		end
+	end)
+
+	-- varligi izle
+	addToggle(pSet, "Varlığı izle (kamera en yakın varlıkta)", false, function(v)
+		S.spectate = v
+		if not v then
+			local h = getHum()
+			if h then workspace.CurrentCamera.CameraSubject = h end
+		end
+	end, "spectate")
+	task.spawn(function()
+		while true do
+			task.wait(0.4)
+			if S.spectate then
+				local root, best, bd = getRoot(), nil, nil
+				for _, o in pairs(ents) do
+					if o.cat == "entity" and o.part and o.part:IsDescendantOf(workspace) and root then
+						local d = (o.part.Position - root.Position).Magnitude
+						if not bd or d < bd then best, bd = o, d end
+					end
+				end
+				if best then workspace.CurrentCamera.CameraSubject = best.part end
+			end
+		end
+	end)
+
+	-- otomatik dolap: varlik yaklasinca en yakin saklanma prompt'unu tetikle
+	addToggle(pSet, "Otomatik dolap (varlık yaklaşınca saklan)", false, function(v) S.autoCloset = v end, "autoCloset")
+	addSlider(pSet, "Dolap tetik mesafesi", 10, 150, S.closetDist, function(v) S.closetDist = v end, 5, "closetDist")
+	task.spawn(function()
+		local cool = 0
+		while true do
+			task.wait(0.3)
+			local root = S.autoCloset and getRoot()
+			if root and os.clock() > cool then
+				local threat = false
+				for _, o in pairs(ents) do
+					if o.cat == "entity" and o.dist and o.dist < S.closetDist then threat = true break end
+				end
+				if threat and X.prompts then
+					local best, bd
+					for p in pairs(X.prompts) do
+						local part = p.Parent and p.Enabled and (p.Parent:IsA("Attachment") and p.Parent.Parent or p.Parent)
+						if part and part:IsA("BasePart") then
+							local text = p.ActionText .. " " .. p.ObjectText .. " " .. part.Name .. " " .. (part.Parent and part.Parent.Name or "")
+							if listHas("hide,closet,wardrobe,locker,cabinet,dolap", text) then
+								local d = (part.Position - root.Position).Magnitude
+								if d < 60 and (not bd or d < bd) then best, bd = p, d end
+							end
+						end
+					end
+					if best then
+						cool = os.clock() + 6
+						local part = best.Parent:IsA("Attachment") and best.Parent.Parent or best.Parent
+						if bd > best.MaxActivationDistance * 0.8 then
+							teleportTo(CFrame.new(part.Position + Vector3.new(0, 3, 3)))
+							task.wait(0.1)
+						end
+						pcall(function()
+							if typeof(fireproximityprompt) == "function" then
+								fireproximityprompt(best)
+							else
+								local h = best.HoldDuration
+								best.HoldDuration = 0
+								best:InputHoldBegin()
+								task.wait(0.05)
+								best:InputHoldEnd()
+								best.HoldDuration = h
+							end
+						end)
+						notify("Otomatik dolap: saklanıldı", "ok")
+					end
+				end
+			end
+		end
+	end)
+end
+
+-- KAZAN / BITIS: finish ve checkpoint'lere isinlan (obby / yarisma tarzi oyunlar icin)
+do
+	local SKIP = "mesh,decal,frame,part,effect,particle"
+	local cache, cacheT = nil, 0
+
+	local function partOf(inst)
+		if inst:IsA("BasePart") then return inst end
+		if inst:IsA("Model") then return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true) end
+	end
+	-- listedeki isimlerden birini iceren model / part'lari bul (ust modeli de eslesiyorsa sadece en disi)
+	local function find(words)
+		local set = {}
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if (d:IsA("Model") or d:IsA("BasePart")) and listHas(words, d.Name) and not listHas(SKIP, d.Name)
+				and not Players:GetPlayerFromCharacter(d:FindFirstAncestorOfClass("Model")) then
+				set[d] = true
+			end
+			n += 1
+			if n % 2000 == 0 then task.wait() end
+		end
+		local list = {}
+		for inst in pairs(set) do
+			local a, nested = inst.Parent, false
+			while a and a ~= workspace do
+				if set[a] then nested = true break end
+				a = a.Parent
+			end
+			local part = not nested and partOf(inst)
+			if part then table.insert(list, { inst = inst, part = part }) end
+		end
+		return list
+	end
+
+	local function touchPart(part)
+		local root = getRoot()
+		if root and typeof(firetouchinterest) == "function" then
+			pcall(function()
+				firetouchinterest(root, part, 0)
+				firetouchinterest(root, part, 1)
+			end)
+		end
+	end
+	local function goTo(part)
+		teleportTo(CFrame.new(part.Position + Vector3.new(0, 3, 0)))
+		task.wait(0.1)
+		touchPart(part)
+	end
+
+	-- bitis: baslangic noktasindan EN UZAK eslesen parca
+	local function finishPart(force)
+		if force or not cache or os.clock() - cacheT > 15 then
+			cache, cacheT = find(S.winNames), os.clock()
+		end
+		local spawn = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+		local root = getRoot()
+		local from = spawn and spawn.Position or (root and root.Position)
+		if not from then return nil end
+		local best, bd
+		for _, e in ipairs(cache) do
+			if e.part.Parent then
+				local d = (e.part.Position - from).Magnitude
+				if not bd or d > bd then best, bd = e, d end
+			end
+		end
+		return best
+	end
+
+	addSection(pTp, "Kazan / Bitiş (obby, yarışma)")
+	addTextBox(pTp, "Bitiş adı:", S.winNames, function(t) S.winNames = t; cache = nil end, "winNames")
+	addButton(pTp, "🏁  Bitişe ışınlan", function()
+		task.spawn(function()
+			local f = finishPart(true)
+			if f then
+				goTo(f.part)
+				notify("Bitişe ışınlandın: " .. f.inst.Name, "ok")
+			else
+				notify("Bitiş bulunamadı (adlar: " .. S.winNames .. ")", "warn")
+			end
+		end)
+	end, "accent")
+
+	addTextBox(pTp, "Checkpoint adı:", S.cpNames, function(t) S.cpNames = t end, "cpNames")
+	addSlider(pTp, "Noktalar arası bekleme (sn)", 0, 2, S.winDelay, function(v) S.winDelay = v end, 0.1, "winDelay")
+	local running = false
+	addButton(pTp, "✅  Checkpoint'leri sırayla gez, sonra bitişe git", function()
+		if running then return end
+		running = true
+		task.spawn(function()
+			local list = find(S.cpNames)
+			table.sort(list, function(a, b)
+				local na, nb = tonumber(a.inst.Name:match("%d+")), tonumber(b.inst.Name:match("%d+"))
+				if na and nb and na ~= nb then return na < nb end
+				return a.inst.Name < b.inst.Name
+			end)
+			X.hold = true
+			for i, e in ipairs(list) do
+				if not getRoot() then break end
+				if e.part.Parent then
+					goTo(e.part)
+					notify("Checkpoint " .. i .. "/" .. #list .. ": " .. e.inst.Name, "info", "cp")
+					task.wait(S.winDelay)
+				end
+			end
+			local f = finishPart(true)
+			if f and getRoot() then goTo(f.part) end
+			if not X.dodging then X.hold = false end
+			notify(f and "Bitti, bitişe gidildi" or ("Bitiş bulunamadı, " .. #list .. " checkpoint gezildi"), f and "ok" or "warn")
+			running = false
+		end)
+	end)
+
+	addToggle(pTp, "Otomatik kazan (bitişte değilsen ışınlan)", false, function(v) S.autoWin = v end, "autoWin")
+	addSlider(pTp, "Otomatik kazan aralığı (sn)", 2, 30, S.autoWinEvery, function(v) S.autoWinEvery = v end, 1, "autoWinEvery")
+	task.spawn(function()
+		while true do
+			task.wait(S.autoWinEvery)
+			if S.autoWin and getRoot() then
+				pcall(function()
+					local f = finishPart(false)
+					local root = getRoot()
+					if f and root and (f.part.Position - root.Position).Magnitude > 30 then goTo(f.part) end
+				end)
+			end
+		end
+	end)
+end
+
+-- PARA TOPLAMA: coin / gold modellerini teker teker isinlanarak topla
+do
+	local running = false
+
+	local function scan(origin)
+		local set = {}
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if (d:IsA("Model") or d:IsA("BasePart")) and listHas(S.coinNames, d.Name) and not ignored(d.Name) then
+				set[d] = true
+			end
+			n += 1
+			if n % 2000 == 0 then task.wait() end
+		end
+		local list = {}
+		for inst in pairs(set) do
+			-- ust modeli de eslesiyorsa sadece en disini al
+			local a, nested = inst.Parent, false
+			while a and a ~= workspace do
+				if set[a] then nested = true break end
+				a = a.Parent
+			end
+			if not nested then
+				local part = inst:IsA("BasePart") and inst or (inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)))
+				if part and (part.Position - origin).Magnitude <= math.min(S.coinRange, 600) then
+					table.insert(list, { inst = inst, part = part })
+				end
+			end
+		end
+		return list
+	end
+
+	local function grab(e)
+		local root = getRoot()
+		if root and typeof(firetouchinterest) == "function" then
+			pcall(function()
+				firetouchinterest(root, e.part, 0)
+				firetouchinterest(root, e.part, 1)
+			end)
+		end
+		local pp = e.inst:FindFirstChildWhichIsA("ProximityPrompt", true)
+		if pp then
+			pcall(function()
+				if typeof(fireproximityprompt) == "function" then
+					fireproximityprompt(pp)
+				else
+					local h = pp.HoldDuration
+					pp.HoldDuration = 0
+					pp:InputHoldBegin()
+					task.wait(0.05)
+					pp:InputHoldEnd()
+					pp.HoldDuration = h
+				end
+			end)
+		end
+		local cd = e.inst:FindFirstChildWhichIsA("ClickDetector", true)
+		if cd and typeof(fireclickdetector) == "function" then pcall(fireclickdetector, cd) end
+	end
+
+	local startBtn
+	local function paint()
+		if startBtn then startBtn.Text = S.coinRun and "⏹  Para toplamayı durdur" or "💰  Para topla (teker teker ışınlan)" end
+	end
+
+	local function run()
+		if running then return end
+		local root = getRoot()
+		if not root then return end
+		running = true
+		S.coinRun = true
+		paint()
+		task.spawn(function()
+			local origin = root.CFrame
+			notify("Para taranıyor...", "info")
+			local list = scan(origin.Position)
+			if #list == 0 then
+				notify("Para bulunamadı (adlar: " .. S.coinNames .. ")", "warn")
+			else
+				X.hold = true
+				local pos, n = origin.Position, 0
+				while #list > 0 and S.coinRun and getRoot() do
+					local bi, bd
+					for i = #list, 1, -1 do
+						local e = list[i]
+						if not (e.inst.Parent and e.part.Parent) then
+							table.remove(list, i)
+						else
+							local d = (e.part.Position - pos).Magnitude
+							if not bd or d < bd then bi, bd = i, d end
+						end
+					end
+					if not bi then break end
+					local e = table.remove(list, bi)
+					teleportTo(CFrame.new(e.part.Position + Vector3.new(0, 2, 0)))
+					task.wait(0.05)
+					grab(e)
+					pos = e.part.Position
+					n += 1
+					task.wait(S.coinDelay)
+				end
+				if S.coinReturn and getRoot() then teleportTo(origin) end
+				if not X.dodging then X.hold = false end
+				notify("Para toplama bitti: " .. n .. " nesne", "ok")
+			end
+			running = false
+			S.coinRun = false
+			paint()
+		end)
+	end
+
+	addSection(pItem, "Para / coin toplama (ışınlanarak)")
+	startBtn = addButton(pItem, "", function()
+		if running then S.coinRun = false else run() end
+	end, "accent")
+	paint()
+	addTextBox(pItem, "Para adı:", S.coinNames, function(t) S.coinNames = t end, "coinNames")
+	addSlider(pItem, "Işınlanmalar arası bekleme (sn)", 0, 1, S.coinDelay, function(v) S.coinDelay = v end, 0.05, "coinDelay")
+	addSlider(pItem, "Tarama menzili (stud)", 50, 600, S.coinRange, function(v) S.coinRange = v end, 10, "coinRange")
+	addToggle(pItem, "Bitince eski yere dön", true, function(v) S.coinReturn = v end, "coinReturn")
+end
+
+-- KAPILAR: gercek / sahte ayri listelenir (isimler ve yollar workspace'teki gibi)
+do
+	local filter, sig = "", ""
+	addSection(pDoor, "Kapı listesi (workspace'teki adlarıyla)")
+	addTextBox(pDoor, "Ara:", "", function(t) filter = t; sig = "" end)
+	addTextBox(pDoor, "Sahte kelimeler:", S.fakeWords, function(t)
+		S.fakeWords = t
+		clearEntities()
+		X.refreshEnt()
+		sig = ""
+	end, "fakeWords")
+	local info = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, pDoor)
+
+	local function makeGroup(color)
+		local hdr = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, TextColor3 = color, Font = Enum.Font.GothamBold,
+			TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, Text = "", NoBind = true,
+		}, pDoor)
+		local box = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pDoor)
+		new("UIListLayout", { Padding = UDim.new(0, 5) }, box)
+		return hdr, box
+	end
+	local realHdr, realBox = makeGroup(T.info)
+	local fakeHdr, fakeBox = makeGroup(T.bad)
+	local distLbls = {}
+
+	local function fill(box, list, color)
+		for _, c in ipairs(box:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		for i = 1, math.min(#list, 40) do
+			local e = list[i]
+			local r = row(box, 42)
+			new("Frame", { Size = UDim2.fromOffset(4, 30), Position = UDim2.fromOffset(6, 6), BackgroundColor3 = color, BorderSizePixel = 0, NoBind = true }, r)
+			new("TextLabel", {
+				Size = UDim2.new(1, -90, 0, 18), Position = UDim2.fromOffset(16, 3), BackgroundTransparency = 1, Text = e.inst.Name,
+				TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+			}, r)
+			distLbls[e.inst] = new("TextLabel", {
+				Size = UDim2.new(1, -90, 0, 14), Position = UDim2.fromOffset(16, 23), BackgroundTransparency = 1,
+				Text = e.inst:GetFullName(), TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 10,
+				TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+			}, r)
+			miniBtn(r, "Git", -60, function()
+				local o, root = ents[e.inst], getRoot()
+				if o and o.part and root then
+					local away = (root.Position - o.part.Position) * Vector3.new(1, 0, 1)
+					away = away.Magnitude > 0.1 and away.Unit or Vector3.zAxis
+					teleportTo(CFrame.new(o.part.Position + away * 4 + Vector3.new(0, 3, 0)))
+				end
+			end)
+		end
+	end
+
+	local function refresh()
+		if not S.entDoor then
+			info.Text = "  Kapı izleme kapalı (Görsel → Kapıları göster)"
+		else
+			info.Text = "  Kırmızı = adında sahte kelimesi geçenler. Tüm kapılar listelenir (ekrandaki etiketler 600 stud ile sınırlı)."
+		end
+		local root = getRoot()
+		local real, fake, f = {}, {}, filter:lower()
+		for inst, o in pairs(ents) do
+			if o.cat == "door" and o.part then
+				local full = inst:GetFullName()
+				if f == "" or full:lower():find(f, 1, true) then
+					table.insert(o.fake and fake or real, { inst = inst, d = root and (o.part.Position - root.Position).Magnitude or 0, full = full })
+				end
+			end
+		end
+		table.sort(real, function(a, b) return a.d < b.d end)
+		table.sort(fake, function(a, b) return a.d < b.d end)
+		local parts = {}
+		for i = 1, math.min(#real, 40) do parts[#parts + 1] = real[i].full end
+		parts[#parts + 1] = "||"
+		for i = 1, math.min(#fake, 40) do parts[#parts + 1] = fake[i].full end
+		local newSig = table.concat(parts, "|")
+		realHdr.Text = "  GERÇEK KAPILAR (" .. #real .. ")"
+		fakeHdr.Text = "  SAHTE KAPILAR (" .. #fake .. ")"
+		if newSig ~= sig then
+			sig = newSig
+			table.clear(distLbls)
+			fill(realBox, real, T.info)
+			fill(fakeBox, fake, T.bad)
+		end
+		if root then
+			for inst, lbl in pairs(distLbls) do
+				local o = ents[inst]
+				if o and o.part then
+					lbl.Text = math.floor((o.part.Position - root.Position).Magnitude + 0.5) .. " stud  •  " .. inst:GetFullName()
+				end
+			end
+		end
+	end
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if main.Visible and pDoor.Visible then pcall(refresh) end
+		end
+	end)
+end
+
+-- DEPO: istemcinin gorebildigi yerlerdeki Tool'lari listele, kendine ver (sadece yerel)
+do
+	local StarterPack = game:GetService("StarterPack")
+	local roots = {
+		ReplicatedStorage, StarterPack, workspace, Lighting,
+		game:GetService("ReplicatedFirst"), game:GetService("StarterGui"),
+	}
+	local found, filter, scanning = {}, "", false
+
+	local function give(tool)
+		local bp = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack", 3)
+		if not bp then notify("Backpack bulunamadı", "bad") return end
+		local ok, clone = pcall(function() return tool:Clone() end)
+		if not ok or not clone then notify("Kopyalanamadı: " .. tool.Name, "bad") return end
+		clone.Parent = bp
+		notify(tool.Name .. " çantana eklendi (sadece yerel)", "ok")
+	end
+
+	addSection(pDepo, "Tool deposu")
+	local info = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		Text = "",
+	}, pDepo)
+	local listBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pDepo)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, listBox)
+
+	local function rebuild()
+		for _, c in ipairs(listBox:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		local f, n = filter:lower(), 0
+		for _, t in ipairs(found) do
+			if t.Parent and (f == "" or t.Name:lower():find(f, 1, true)) then
+				n += 1
+				if n > 40 then break end
+				local r = row(listBox, 40)
+				new("TextLabel", {
+					Size = UDim2.new(1, -76, 0, 18), Position = UDim2.fromOffset(10, 3), BackgroundTransparency = 1, Text = t.Name,
+					TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				new("TextLabel", {
+					Size = UDim2.new(1, -76, 0, 14), Position = UDim2.fromOffset(10, 21), BackgroundTransparency = 1, Text = t:GetFullName(),
+					TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				miniBtn(r, "Ver", -60, function() give(t) end)
+			end
+		end
+		local ss = #game:GetService("ServerStorage"):GetChildren()
+		info.Text = string.format("%d tool bulundu (en fazla 40 listelenir).\nServerStorage istemciye hiç gönderilmez, burada görünmez (şu an %d öğe).", #found, ss)
+	end
+
+	local function scan()
+		if scanning then return end
+		scanning = true
+		task.spawn(function()
+			table.clear(found)
+			local n = 0
+			for _, r in ipairs(roots) do
+				for _, d in ipairs(r:GetDescendants()) do
+					if (d:IsA("Tool") or d:IsA("HopperBin")) and not (d.Parent and d.Parent:FindFirstChildOfClass("Humanoid")) then
+						table.insert(found, d)
+					end
+					n += 1
+					if n % 2000 == 0 then task.wait() end
+				end
+			end
+			scanning = false
+			rebuild()
+		end)
+	end
+
+	addButton(pDepo, "🔄  Tara (ReplicatedStorage, StarterPack, Workspace...)", scan, "accent")
+	addTextBox(pDepo, "Ara:", "", function(t) filter = t; rebuild() end)
+	addTextBox(pDepo, "Ada göre ver:", "", function(t)
+		local q = t:lower()
+		if q == "" then return end
+		for _, tool in ipairs(found) do
+			if tool.Parent and tool.Name:lower():find(q, 1, true) then give(tool) return end
+		end
+		notify("'" .. t .. "' adında tool bulunamadı, önce Tara", "warn")
+	end)
+
+	addSection(pDepo, "ReplicatedStorage içeriği")
+	local rsBox = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, TextWrapped = true,
+		TextColor3 = T.sub, Font = Enum.Font.Code, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top, Text = "",
+	}, pDepo)
+	addButton(pDepo, "📋  İçeriği listele", function()
+		local lines = {}
+		for i, c in ipairs(ReplicatedStorage:GetChildren()) do
+			if i > 60 then lines[#lines + 1] = "..."; break end
+			lines[#lines + 1] = c.ClassName .. "  " .. c.Name
+		end
+		rsBox.Text = #lines > 0 and table.concat(lines, "\n") or "(boş)"
+	end)
+
+	task.delay(3, scan)
+end
+
+-- ESYA LISTESI + OTOMATIK TOPLAMA
+do
+	local PathfindingService = game:GetService("PathfindingService")
+	local tried = {}
+	local running = false
+
+	local function itemPos(o) return o.part.Position end
+
+	local function nearestItem()
+		local root = getRoot()
+		if not root then return nil end
+		local best, bd
+		for inst, o in pairs(ents) do
+			if (o.cat == "item" or (o.cat == "chest" and S.collectChest)) and o.part and o.part:IsDescendantOf(workspace)
+				and (not tried[inst] or os.clock() - tried[inst] > 30) then
+				local d = (itemPos(o) - root.Position).Magnitude
+				if d <= math.min(S.collectMax, 600) and (not bd or d < bd) then best, bd = inst, d end
+			end
+		end
+		return best
+	end
+
+	-- noktadan noktaya git: Işınlan = aninda, Yürü = collectSpeed hizinda
+	local function moveTo(pos)
+		if S.collectMode == "Işınlan" then
+			if not getRoot() then return false end
+			teleportTo(CFrame.new(pos))
+			return true
+		end
+		-- dogal yuruyus: yol bul + Humanoid:MoveTo (fizik / anti-cheat ile kavga etmez)
+		local function active() return S.autoCollect or S.collectManual end
+		local function dist2()
+			local r = getRoot()
+			return r and (r.Position - pos).Magnitude or math.huge
+		end
+		local hum = getHum()
+		if not hum then return false end
+		local oldWS = hum.WalkSpeed
+		if not S.speedOn then hum.WalkSpeed = S.collectSpeed end
+		local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true })
+		local root = getRoot()
+		local ok = root and pcall(function() path:ComputeAsync(root.Position, pos) end)
+		if ok and path.Status == Enum.PathStatus.Success then
+			for _, wp in ipairs(path:GetWaypoints()) do
+				if not active() or dist2() < 5 then break end
+				if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+				hum:MoveTo(wp.Position)
+				local t0 = os.clock()
+				local r
+				repeat
+					task.wait(0.05)
+					r = getRoot()
+				until not active() or not r or (r.Position - wp.Position).Magnitude < 4 or os.clock() - t0 > 2.5
+			end
+		end
+		-- yol bulunamadiysa dogrudan yuru
+		local t1 = os.clock()
+		while active() and dist2() > 4 and os.clock() - t1 < 5 do
+			hum:MoveTo(pos)
+			task.wait(0.1)
+		end
+		if not S.speedOn and hum.Parent then hum.WalkSpeed = oldWS end
+		return dist2() <= 8
+	end
+
+	local function pickup(inst, o)
+		local root = getRoot()
+		if root and typeof(firetouchinterest) == "function" then
+			pcall(function()
+				firetouchinterest(root, o.part, 0)
+				firetouchinterest(root, o.part, 1)
+			end)
+		end
+		local pp = inst:FindFirstChildWhichIsA("ProximityPrompt", true)
+		if pp then
+			pcall(function()
+				if typeof(fireproximityprompt) == "function" then
+					fireproximityprompt(pp)
+				else
+					pp:InputHoldBegin()
+					task.wait(pp.HoldDuration + 0.1)
+					pp:InputHoldEnd()
+				end
+			end)
+		end
+		local cd = inst:FindFirstChildWhichIsA("ClickDetector", true)
+		if cd and typeof(fireclickdetector) == "function" then pcall(fireclickdetector, cd) end
+	end
+
+	local function collectOne(inst)
+		local o = ents[inst]
+		if not o or not o.part then return end
+		tried[inst] = os.clock()
+		S.collectManual = true
+		if moveTo(itemPos(o)) then
+			pickup(inst, o)
+			if not inst:FindFirstChildWhichIsA("ProximityPrompt", true) and not inst:FindFirstChildWhichIsA("ClickDetector", true)
+				and typeof(firetouchinterest) ~= "function" then
+				notify("'" .. inst.Name .. "' için prompt / ClickDetector yok (dokunmayla toplanıyor olabilir)", "warn")
+			end
+		else
+			notify("'" .. inst.Name .. "' konumuna ulaşılamadı", "warn")
+		end
+		S.collectManual = false
+	end
+
+	-- haritadaki tum ProximityPrompt'lar (bir kez taranir, sonra olay ile guncellenir)
+	local prompts = {}
+	X.prompts = prompts
+	task.spawn(function()
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if d:IsA("ProximityPrompt") then prompts[d] = true end
+			n += 1
+			if n % 2000 == 0 then task.wait() end
+		end
+	end)
+	X.onAdded(function(d)
+		if d:IsA("ProximityPrompt") then prompts[d] = true end
+	end)
+	workspace.DescendantRemoving:Connect(function(d) prompts[d] = nil end)
+	local function promptPart(p)
+		local part = p.Parent
+		if part and part:IsA("Attachment") then part = part.Parent end
+		if part and part:IsA("BasePart") then return part end
+	end
+
+	-- R: yakindaki tum prompt'lari (cekmece, esya, anahtarli kapi...) hizlica tetikle
+	local function firePrompt(p)
+		if typeof(fireproximityprompt) == "function" then
+			fireproximityprompt(p)
+		else
+			local hold = p.HoldDuration
+			p.HoldDuration = 0
+			p:InputHoldBegin()
+			task.wait(0.05)
+			p:InputHoldEnd()
+			p.HoldDuration = hold
+		end
+	end
+	local function underDoor(inst)
+		local a = inst
+		while a and a ~= workspace do
+			if listHas(S.entDoors, a.Name) and not listHas("frame", a.Name) then return true end
+			a = a.Parent
+		end
+		return false
+	end
+	local quickBusy = false
+	function X.quick()
+		local root = getRoot()
+		if quickBusy or not root then return end
+		quickBusy = true
+		task.spawn(function()
+			local origin = root.CFrame
+			X.hold = true -- isinlanirken fizik firlatmasin
+			local targets = {}
+			for d in pairs(prompts) do
+				if d.Parent and d.Enabled then
+					local part = promptPart(d)
+					if part then
+						local dist = (part.Position - origin.Position).Magnitude
+						if dist <= S.rRange then
+							local isDoor = underDoor(part)
+							if (isDoor and S.rDoors) or (not isDoor and S.rItems) then
+								table.insert(targets, { p = d, part = part, dist = dist })
+							end
+						end
+					end
+				end
+			end
+			table.sort(targets, function(a, b) return a.dist < b.dist end)
+			local n = 0
+			for _, t in ipairs(targets) do
+				local r = getRoot()
+				if not r then break end
+				if t.part.Parent and t.p.Parent then
+					if (t.part.Position - r.Position).Magnitude > math.max(4, t.p.MaxActivationDistance * 0.7) then
+						-- parcanin icine degil, ona dogru bakan tarafina dur
+						local away = (origin.Position - t.part.Position) * Vector3.new(1, 0, 1)
+						away = away.Magnitude > 0.1 and away.Unit or Vector3.zAxis
+						teleportTo(CFrame.new(t.part.Position + away * 3 + Vector3.new(0, 2, 0)))
+						task.wait(0.08)
+					end
+					pcall(firePrompt, t.p)
+					n += 1
+					task.wait(S.rDelay)
+				end
+			end
+			if S.rReturn and getRoot() then teleportTo(origin) end
+			if not X.dodging then X.hold = false end
+			notify(n > 0 and ("R: " .. n .. " etkileşim yapıldı") or "R: yakında etkileşim yok", n > 0 and "ok" or "warn")
+			quickBusy = false
+		end)
+	end
+
+	-- surekli mod: ISINLANMADAN, sadece prompt menzilindeki esya/cekmeceleri tetikler
+	local function isLoot(p, part)
+		local m = part:FindFirstAncestorOfClass("Model")
+		local text = p.ActionText .. " " .. p.ObjectText .. " " .. part.Name .. " " .. (m and m.Name or "")
+		if listHas(S.nearSkip, text) then return false end
+		return listHas(S.lootWords, text) or listHas(S.entItems, text) or listHas(S.entChests, text)
+	end
+	task.spawn(function()
+		local cool = setmetatable({}, { __mode = "k" })
+		while true do
+			task.wait(S.nearInterval)
+			local root = S.nearAuto and not quickBusy and getRoot()
+			if root then
+				local char = getChar()
+				for p in pairs(prompts) do
+					if not S.nearAuto then break end
+					local part = p.Parent and p.Enabled and promptPart(p)
+					if part and (not cool[p] or os.clock() - cool[p] > 3)
+						and not (char and part:IsDescendantOf(char)) and not p:FindFirstAncestorOfClass("Tool") then
+						if (part.Position - root.Position).Magnitude <= p.MaxActivationDistance then
+							local isDoor = underDoor(part)
+							if (isDoor and S.nearDoors) or (not isDoor and S.nearItems and isLoot(p, part)) then
+								cool[p] = os.clock()
+								pcall(firePrompt, p)
+								task.wait(S.rDelay)
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+
+	function X.startCollect()
+		if running then return end
+		running = true
+		table.clear(tried)
+		task.spawn(function()
+			while S.autoCollect do
+				local inst = nearestItem()
+				if inst then
+					collectOne(inst)
+					task.wait(S.collectDelay)
+				else
+					task.wait(0.5)
+				end
+			end
+			running = false
+		end)
+	end
+
+	addSection(pItem, "Eşya takibi")
+	addToggle(pItem, "Eşyaları izle (listele)", false, function(v)
+		S.entItem = v
+		X.refreshEnt()
+	end, "entItem")
+	addTextBox(pItem, "Eşya adı:", S.entItems, function(t) S.entItems = t; X.refreshEnt() end, "entItems")
+	addToggle(pItem, "Sandık / kasa gibi şeyleri izle", false, function(v)
+		S.entChest = v
+		X.refreshEnt()
+	end, "entChest")
+	addTextBox(pItem, "Sandık adı:", S.entChests, function(t) S.entChests = t; X.refreshEnt() end, "entChests")
+	addSection(pItem, "Otomatik toplama")
+	addToggle(pItem, "Toplarken sandıkları da aç", true, function(v) S.collectChest = v end, "collectChest")
+	addToggle(pItem, "Otomatik topla (en yakından başla)", false, function(v)
+		S.autoCollect = v
+		if v then
+			if not S.entItem then
+				registry.entItem.set(true)
+				registry.entItem.cb(true)
+			end
+			if S.collectChest and not S.entChest then
+				registry.entChest.set(true)
+				registry.entChest.cb(true)
+			end
+			notify("Otomatik toplama başladı", "ok")
+			X.startCollect()
+		end
+	end, "autoCollect")
+	do
+		local modes = { "Yürü", "Işınlan" }
+		local modeBtn
+		local function setMode(m)
+			S.collectMode = m
+			if modeBtn then modeBtn.Text = "Gidiş: " .. m .. "  (tıkla değiştir)" end
+		end
+		modeBtn = addButton(pItem, "", function()
+			setMode(modes[((table.find(modes, S.collectMode) or 1) % #modes) + 1])
+			markDirty()
+		end)
+		setMode(S.collectMode)
+		registry.collectMode = { default = "Yürü", cb = function() end, get = function() return S.collectMode end, set = setMode }
+	end
+	addSlider(pItem, "Yürüme hızı (WalkSpeed)", 10, 300, S.collectSpeed, function(v) S.collectSpeed = v end, 5, "collectSpeed")
+	addSlider(pItem, "Eşyalar arası bekleme (sn)", 0, 3, S.collectDelay, function(v) S.collectDelay = v end, 0.1, "collectDelay")
+	addSlider(pItem, "Max toplama mesafesi", 50, 600, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
+
+	addSection(pItem, "Yakındakileri sürekli topla (ışınlanmadan)")
+	addToggle(pItem, "Sürekli otomatik topla (çekmece / eşya)", false, function(v) S.nearAuto = v end, "nearAuto")
+	addToggle(pItem, "Eşya / çekmeceleri topla", true, function(v) S.nearItems = v end, "nearItems")
+	addToggle(pItem, "Kapıları da aç", false, function(v) S.nearDoors = v end, "nearDoors")
+	addSlider(pItem, "Tarama aralığı (sn)", 0.2, 3, S.nearInterval, function(v) S.nearInterval = v end, 0.1, "nearInterval")
+	addTextBox(pItem, "Toplanır:", S.lootWords, function(t) S.lootWords = t end, "lootWords")
+	addTextBox(pItem, "Atla:", S.nearSkip, function(t) S.nearSkip = t end, "nearSkip")
+	addSection(pItem, "R tuşu: hızlı topla / aç")
+	addToggle(pItem, "R ile yakındakileri tetikle", true, function(v) S.rQuick = v end, "rQuick")
+	addToggle(pItem, "Çekmece / eşya / sandık", true, function(v) S.rItems = v end, "rItems")
+	addToggle(pItem, "Kapılar (anahtarlı dahil)", true, function(v) S.rDoors = v end, "rDoors")
+	addToggle(pItem, "İş bitince eski yere dön", true, function(v) S.rReturn = v end, "rReturn")
+	addSlider(pItem, "R menzili (stud)", 10, 200, S.rRange, function(v) S.rRange = v end, 5, "rRange")
+	addSlider(pItem, "İşlemler arası bekleme (sn)", 0, 1, S.rDelay, function(v) S.rDelay = v end, 0.05, "rDelay")
+
+	addSection(pItem, "Bulunan eşyalar")
+	local countLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pItem)
+	local listBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pItem)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, listBox)
+
+	local shown, sig = {}, ""
+	local function refreshList(force)
+		local root = getRoot()
+		local arr = {}
+		for inst, o in pairs(ents) do
+			if (o.cat == "item" or o.cat == "chest") and o.part then
+				local d = root and (itemPos(o) - root.Position).Magnitude or 0
+				if d <= 600 then table.insert(arr, { inst = inst, d = d }) end
+			end
+		end
+		table.sort(arr, function(a, b) return a.d < b.d end)
+		countLbl.Text = "  " .. #arr .. " eşya bulundu (en yakın 25 listelenir)"
+		local s = {}
+		for i = 1, math.min(#arr, 25) do s[i] = arr[i].inst:GetFullName() end
+		local newSig = table.concat(s, "|")
+		if force or newSig ~= sig then
+			sig = newSig
+			for _, c in ipairs(listBox:GetChildren()) do
+				if c:IsA("Frame") then c:Destroy() end
+			end
+			table.clear(shown)
+			for i = 1, math.min(#arr, 25) do
+				local inst = arr[i].inst
+				local r = row(listBox, 36)
+				local lbl = new("TextLabel", {
+					Size = UDim2.new(1, -130, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
+					Text = inst.Name, TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				shown[i] = { inst = inst, lbl = lbl }
+				miniBtn(r, "Git", -118, function()
+					local o = ents[inst]
+					if o and o.part then teleportTo(CFrame.new(itemPos(o) + Vector3.new(0, 3, 0))) end
+				end)
+				miniBtn(r, "Al", -60, function() task.spawn(collectOne, inst) end)
+			end
+		end
+		for _, e in ipairs(shown) do
+			local o = ents[e.inst]
+			if o and o.part and root then
+				e.lbl.Text = e.inst.Name .. "  " .. math.floor((itemPos(o) - root.Position).Magnitude + 0.5) .. " stud"
+			end
+		end
+	end
+	addButton(pItem, "🔄  Listeyi yenile", function() X.refreshEnt(); task.delay(0.6, refreshList, true) end)
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if main.Visible and pItem.Visible then pcall(refreshList) end
+		end
+	end)
+end
+
+-- SUNUCU / LOG
+do
+	local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1 }, pLog)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, bar)
+
+	local function refreshLogVisibility()
+		for _, e in ipairs(logEntries) do
+			e.Visible = logFilters[e:GetAttribute("Kind")] ~= false
+		end
+	end
+	local function chip(text, color, w, onClick)
+		local b = new("TextButton", {
+			Size = UDim2.fromOffset(w, 26), BackgroundColor3 = T.card, Text = text, TextColor3 = color,
+			Font = Enum.Font.GothamMedium, TextSize = 11, AutoButtonColor = false, NoBind = true,
+		}, bar)
+		round(b, 6)
+		b.MouseButton1Click:Connect(function() onClick(b) end)
+		return b
+	end
+	for _, k in ipairs({ "remote", "chat", "entity", "output", "warn", "error", "panel", "client" }) do
+		local b = chip(k, logColor(k), 52, function(btn)
+			logFilters[k] = not logFilters[k]
+			btn.BackgroundTransparency = logFilters[k] and 0 or 0.7
+			btn.TextTransparency = logFilters[k] and 0 or 0.6
+			if k == "client" then S.logClient = logFilters[k] end
+			refreshLogVisibility()
+		end)
+		b.BackgroundTransparency = logFilters[k] and 0 or 0.7
+		b.TextTransparency = logFilters[k] and 0 or 0.6
+	end
+	chip("⏸", T.text, 28, function(btn)
+		logPaused = not logPaused
+		btn.Text = logPaused and "▶" or "⏸"
+	end)
+	chip("🗑", T.text, 28, function()
+		for _, e in ipairs(logEntries) do e:Destroy() end
+		table.clear(logEntries)
+	end)
+
+	logList = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, -36), Position = UDim2.fromOffset(0, 34), BackgroundColor3 = T.bg,
+		BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.stroke,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	}, pLog)
+	round(logList, 8)
+	stroke(logList)
+	new("UIListLayout", { Padding = UDim.new(0, 2) }, logList)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, logList)
+end
+
+-- GORSEL
+addSection(pVis, "Oyuncu ESP")
+addToggle(pVis, "ESP", false, function(v)
+	S.espOn = v
+	if not v then clearESP() end
+end, "espOn")
+addToggle(pVis, "Highlight", true, function(v) S.espHighlight = v end, "espHighlight")
+addToggle(pVis, "İsim", true, function(v) S.espName = v end, "espName")
+addToggle(pVis, "Mesafe (isim altında)", true, function(v) S.espDist = v end, "espDist")
+addToggle(pVis, "Takım rengi", false, function(v) S.espTeam = v end, "espTeam")
+addSlider(pVis, "ESP max mesafe (stud)", 50, 600, S.espMax, function(v) S.espMax = v end, 50, "espMax")
+addSection(pVis, "Akıllı izleyici (varlık / kapı / dolap)")
+addToggle(pVis, "İzleyici aktif", true, function(v)
+	S.entOn = v
+	if not v then clearEntities() end
+	X.refreshEnt()
+end, "entOn")
+addToggle(pVis, "Varlık highlight (humanoid / tehlikeli)", true, function(v) S.entHighlight = v end, "entHighlight")
+addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refreshEnt() end, "entDoor")
+addToggle(pVis, "Kapı highlight (en yakın 24)", true, function(v) S.entDoorHl = v end, "entDoorHl")
+addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
+addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
+addSlider(pVis, "Varlık max mesafe", 50, 600, S.entMax, function(v) S.entMax = v end, 50, "entMax")
+addSlider(pVis, "Kapı max mesafe", 20, 600, S.doorMax, function(v) S.doorMax = v end, 10, "doorMax")
+addSlider(pVis, "Dolap/eşya max mesafe", 20, 600, S.objMax, function(v) S.objMax = v end, 10, "objMax")
+addToggle(pVis, "Sesli uyarı (yeni varlık)", true, function(v) S.soundOn = v end, "soundOn")
+addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t; X.refreshEnt() end, "entDanger")
+addTextBox(pVis, "Kapı:", S.entDoors, function(t) S.entDoors = t; X.refreshEnt() end, "entDoors")
+addTextBox(pVis, "Dolap:", S.entHides, function(t) S.entHides = t; X.refreshEnt() end, "entHides")
+addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t; X.refreshEnt() end, "entIgnore")
+addButton(pVis, "Takip edilenleri temizle", clearEntities)
+addSection(pVis, "Debug")
+addToggle(pVis, "Hitbox'ları göster", false, function(v)
+	S.hbViz = v
+	if v then
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if hbTarget(d) then addHbViz(d) end
+		end
+	else
+		clearHbViz()
+	end
+end, "hbViz")
+addToggle(pVis, "Fullbright", false, function(v)
+	S.fullbright = v
+	if not v then
+		Lighting.Brightness = 2
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 100000
+		Lighting.GlobalShadows = true
+		Lighting.Ambient = Color3.fromRGB(70, 70, 70)
+	end
+end, "fullbright")
+addToggle(pVis, "FOV aktif", false, function(v) S.fovOn = v end, "fovOn")
+addSlider(pVis, "FOV", 30, 120, S.fov, function(v) S.fov = v end, 1, "fov")
+addSection(pVis, "Ortam / Kamera")
+addToggle(pVis, "Saati kilitle", false, function(v)
+	S.clockOn = v
+	if not v then Lighting.ClockTime = X.clock0 end
+end, "clockOn")
+addSlider(pVis, "Saat (0-24)", 0, 24, S.clockTime, function(v) S.clockTime = v end, 0.5, "clockTime")
+addToggle(pVis, "Sisi kaldır", false, function(v)
+	S.noFog = v
+	if not v then Lighting.FogEnd = X.fog0 end
+end, "noFog")
+addToggle(pVis, "Crosshair", false, function(v) S.crosshair = v end, "crosshair")
+addToggle(pVis, "Zoom limitini kaldır", false, function(v)
+	S.zoomOn = v
+	if not v then player.CameraMaxZoomDistance = X.zoom0 end
+end, "zoomOn")
+addSlider(pVis, "Max zoom", 10, 2000, S.zoom, function(v) S.zoom = v end, 10, "zoom")
+addToggle(pVis, "FPS / Ping göster", false, function(v) S.showStats = v end, "showStats")
+
+-- AYARLAR
+addSection(pSet, "Tema")
+do
+	local grid = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pSet)
+	new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 0, 32), CellPadding = UDim2.fromOffset(6, 6) }, grid)
+	for idx, th in ipairs(THEMES) do
+		local b = new("TextButton", {
+			BackgroundColor3 = T.card, Text = th.name, TextColor3 = T.text,
+			Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false,
+		}, grid)
+		round(b, 8)
+		new("UIStroke", { Color = th.accent, Thickness = 1.5, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, NoBind = true }, b)
+		b.MouseButton1Click:Connect(function()
+			X.themeIndex = idx
+			applyTheme(th)
+			markDirty()
+		end)
+	end
+end
+addSection(pSet, "Arka plan görseli (anime vb.)")
+addTextBox(pSet, "Görsel ID:", S.bgId, function(t)
+	S.bgId = t
+	setBgImage()
+	if t ~= "" and not t:match("%d+") then notify("Geçersiz ID", "warn") end
+end, "bgId")
+addSlider(pSet, "Görsel saydamlığı (0 = net)", 0, 1, S.bgTrans, function(v)
+	S.bgTrans = v
+	bgImage.ImageTransparency = v
+end, 0.05, "bgTrans")
+addSection(pSet, "Uyarı sesi")
+addTextBox(pSet, "Özel ses ID:", SOUND_ID, function(t)
+	local id = t:match("%d+")
+	alertSound.SoundId = id and ("rbxassetid://" .. id) or DEFAULT_SOUND
+end, "soundId")
+addSlider(pSet, "Ses seviyesi", 0, 1, S.soundVol, function(v) S.soundVol = v end, 0.05, "soundVol")
+addButton(pSet, "🔔  Normal uyarıyı test et", function() playAlert(false, true) end)
+addButton(pSet, "🚨  Tehlike uyarısını test et", function() playAlert(true, true) end)
+addSection(pSet, "Arayüz")
+addSlider(pSet, "Panel boyutu", 0.6, 1.4, uiScale.Scale, function(v) uiScale.Scale = v end, 0.05, "uiScale")
+addSection(pSet, "Kısayollar")
+for _, t in ipairs({ "K  →  Paneli aç/kapat", "F  →  Fly", "N  →  NoClip", "CTRL + tık  →  Click TP", "R  →  Yakındakileri hızlı topla / aç", "Space / Shift  →  Fly ve NoClip'te yukarı / aşağı" }) do
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Text = "  " .. t, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pSet)
+end
+addSection(pSet, "Ayarları kaydet")
+do
+	local FILE = "HunterPanel_settings.json"
+	local canFile = typeof(writefile) == "function" and typeof(readfile) == "function"
+	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true, entIgnore = true, killNames = true }
+
+	local function encode()
+		local data = { theme = X.themeIndex, v = {} }
+		for k, r in pairs(registry) do
+			if not NO_SAVE[k] and r.get then data.v[k] = r.get() end
+		end
+		return HttpService:JSONEncode(data)
+	end
+	local function apply(json)
+		local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
+		if not ok or type(data) ~= "table" then return false end
+		if THEMES[data.theme] then
+			X.themeIndex = data.theme
+			applyTheme(THEMES[data.theme])
+		end
+		for k, v in pairs(data.v or {}) do
+			local r = registry[k]
+			if r and not NO_SAVE[k] and typeof(v) == typeof(r.get()) then
+				r.set(v)
+				r.cb(v)
+			end
+		end
+		return true
+	end
+
+	function X.save(manual)
+		if not canFile then
+			if manual then notify("Dosya kaydı yok - JSON'u kopyalayıp sakla", "warn") end
+			return
+		end
+		local ok = pcall(writefile, FILE, encode())
+		if manual then notify(ok and "Ayarlar kaydedildi" or "Kaydedilemedi", ok and "ok" or "bad") end
+	end
+	function X.load(silent)
+		if not canFile then return end
+		local ok, txt = pcall(readfile, FILE)
+		if ok and txt and apply(txt) then
+			if not silent then notify("Ayarlar yüklendi", "ok") end
+		elseif not silent then
+			notify("Kayıtlı ayar yok", "warn")
+		end
+	end
+
+	addButton(pSet, "💾  Şimdi kaydet", function() X.save(true) end, "accent")
+	addButton(pSet, "📂  Kayıtlı ayarları yükle", function() X.load(false) end)
+	local jsonBox = addTextBox(pSet, "JSON:", "", function(t)
+		if t:sub(1, 1) == "{" then
+			local ok = apply(t)
+			notify(ok and "JSON yüklendi" or "Geçersiz JSON", ok and "ok" or "bad")
+		end
+	end)
+	addButton(pSet, "📋  Ayarları JSON olarak göster", function() jsonBox.Text = encode() end)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		Text = canFile and ("  Otomatik kayıt: " .. FILE) or "  writefile yok: otomatik kayıt çalışmaz, JSON'u kopyalayıp kutuya yapıştır",
+	}, pSet)
+end
+addSection(pSet, "Sıfırla")
+addButton(pSet, "Tüm ayarları sıfırla", function()
+	for _, r in pairs(registry) do
+		r.set(r.default)
+		r.cb(r.default)
+	end
+	stopFly(); clearESP(); clearEntities(); clearHbViz()
+	workspace.Gravity = DEFAULT_GRAVITY
+	camera.FieldOfView = DEFAULT_FOV
+	local hum = getHum()
+	if hum then hum.WalkSpeed = 16; hum.JumpPower = 50; camera.CameraSubject = hum end
+	notify("Her şey sıfırlandı", "ok")
+end, "bad")
+
+selectTab("Oyuncu")
+X.load(true)
+X.refreshKill()
+
+------------------------------------------------------------------
+-- SUNUCUDAN GELEN MESAJLAR
+------------------------------------------------------------------
+local function short(v)
+	local t = typeof(v)
+	if t == "string" then
+		return '"' .. (#v > 60 and v:sub(1, 60) .. "…" or v) .. '"'
+	elseif t == "Instance" then
+		return v:GetFullName()
+	elseif t == "table" then
+		local n = 0
+		for _ in pairs(v) do n += 1 end
+		return "{table:" .. n .. "}"
+	end
+	return tostring(v)
+end
+
+local hooked = {}
+local function hookRemote(r)
+	if hooked[r] or not r:IsA("RemoteEvent") then return end
+	if r.Parent and r.Parent.Name == "DefaultChatSystemChatEvents" then return end
+	hooked[r] = true
+	r.OnClientEvent:Connect(function(...)
+		local a = table.pack(...)
+		local parts = {}
+		for i = 1, math.min(a.n, 5) do parts[i] = short(a[i]) end
+		if a.n > 5 then parts[#parts + 1] = "…" end
+		addLog("remote", r.Name .. "(" .. table.concat(parts, ", ") .. ")")
+	end)
+end
+for _, d in ipairs(ReplicatedStorage:GetDescendants()) do hookRemote(d) end
+ReplicatedStorage.DescendantAdded:Connect(hookRemote)
+
+pcall(function()
+	TextChatService.MessageReceived:Connect(function(msg)
+		local who = "SISTEM"
+		if msg.TextSource then
+			local p = Players:GetPlayerByUserId(msg.TextSource.UserId)
+			who = p and p.Name or msg.TextSource.Name
+		end
+		addLog("chat", who .. ": " .. msg.Text)
+	end)
+end)
+task.spawn(function()
+	local ev = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents", 3)
+	local f = ev and ev:FindFirstChild("OnMessageDoneFiltering")
+	if f then
+		f.OnClientEvent:Connect(function(d)
+			addLog("chat", tostring(d.FromSpeaker) .. ": " .. tostring(d.Message))
+		end)
+	end
+end)
+
+LogService.MessageOut:Connect(function(msg, mtype)
+	if not S.logClient then return end
+	local kind = "output"
+	if mtype == Enum.MessageType.MessageError then kind = "error"
+	elseif mtype == Enum.MessageType.MessageWarning then kind = "warn" end
+	addLog(kind, msg)
+end)
+
+------------------------------------------------------------------
+-- ANA DONGULER
+------------------------------------------------------------------
+RunService.Stepped:Connect(function()
+	local c, root, hum = getChar(), getRoot(), getHum()
+	if not (c and root and hum) then return end
+	if S.noclip then
+		for _, p in ipairs(c:GetDescendants()) do
+			if p:IsA("BasePart") then p.CanCollide = false end
+		end
+		if not S.flyOn then
+			local v = root.AssemblyLinearVelocity
+			local y = 0
+			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then y = S.noclipVert
+			elseif UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then y = -S.noclipVert end
+			root.AssemblyLinearVelocity = Vector3.new(v.X, y, v.Z)
+		end
+	end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+	local hum, root = getHum(), getRoot()
+	if hum then
+		if S.speedOn then
+			if not X.speeding then X.speeding = true; X.cur = X.baseWalk end
+			local step = S.speedRamp and S.rampRate * dt or math.huge
+			X.cur = X.cur + math.clamp(S.speed - X.cur, -step, step)
+			if S.speedMode == "WalkSpeed" then
+				if hum.WalkSpeed ~= X.cur then hum.WalkSpeed = X.cur end
+			else
+				if hum.WalkSpeed ~= X.baseWalk then hum.WalkSpeed = X.baseWalk end
+				local dir = hum.MoveDirection
+				if root and not S.flyOn and dir.Magnitude > 0 then
+					if S.speedMode == "Velocity" then
+						local v = root.AssemblyLinearVelocity
+						root.AssemblyLinearVelocity = Vector3.new(dir.X * X.cur, v.Y, dir.Z * X.cur)
+					else
+						root.CFrame = root.CFrame + dir * math.max(0, X.cur - X.baseWalk) * dt
+					end
+				end
+			end
+		else
+			if X.speeding then X.speeding = false; hum.WalkSpeed = X.baseWalk end
+			X.baseWalk = hum.WalkSpeed
+		end
+		if S.jumpOn then
+			if not hum.UseJumpPower then hum.UseJumpPower = true end
+			if hum.JumpPower ~= S.jump then hum.JumpPower = S.jump end
+		end
+		if S.godMode and hum.Health > 0 and hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
+		if S.flyOn then hum.PlatformStand = true end
+		if S.noAccel and root and not S.flyOn and hum.FloorMaterial ~= Enum.Material.Air and hum.MoveDirection.Magnitude < 0.01 then
+			local v = root.AssemblyLinearVelocity
+			root.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+		end
+	end
+	if S.gravityOn and workspace.Gravity ~= S.gravity then workspace.Gravity = S.gravity end
+	if root and hum then
+		X.update(dt, hum, root)
+		if hum.FloorMaterial ~= Enum.Material.Air and root.Position.Y > S.voidY + 100 then
+			safePos = root.CFrame
+		end
+		if S.antiVoid and root.Position.Y < S.voidY and safePos then
+			teleportTo(safePos + Vector3.new(0, 5, 0))
+		end
+	end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+	if S.flyOn then updateFly() end
+	if S.clockOn then Lighting.ClockTime = S.clockTime end
+	if S.noFog then Lighting.FogEnd = 1e6 end
+	if S.zoomOn and player.CameraMaxZoomDistance ~= S.zoom then player.CameraMaxZoomDistance = S.zoom end
+	X.crossH.Visible, X.crossV.Visible = S.crosshair, S.crosshair
+	X.stats.Visible = S.showStats
+	if S.showStats and dt > 0 then
+		X.fps = X.fps * 0.9 + (1 / dt) * 0.1
+		X.stats.Text = string.format("FPS %d  |  Ping %d ms", X.fps, player:GetNetworkPing() * 2000)
+	end
+	if S.fovOn and camera.FieldOfView ~= S.fov then camera.FieldOfView = S.fov end
+	if S.espOn then updateESP() end
+	if S.entOn then
+		X.entT = (X.entT or 0) + dt
+		if X.entT >= 0.15 then
+			X.entT = 0
+			updateEntities()
+		end
+	end
+	if S.hbViz then updateHbViz() end
+	if S.fullbright then
+		Lighting.Brightness = 3
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 1e6
+		Lighting.GlobalShadows = false
+		Lighting.Ambient = Color3.new(1, 1, 1)
+	end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+	if S.infJump then
+		local hum = getHum()
+		if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end
+end)
+
+local mouse = player:GetMouse()
+mouse.Button1Down:Connect(function()
+	if S.clickTP and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) and mouse.Hit then
+		teleportTo(CFrame.new(mouse.Hit.Position + Vector3.new(0, 4, 0)))
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.K then
+		main.Visible = not main.Visible
+	elseif input.KeyCode == Enum.KeyCode.F then
+		S.flyOn = not S.flyOn
+		setFly(S.flyOn)
+		if not S.flyOn then stopFly() end
+	elseif input.KeyCode == Enum.KeyCode.N then
+		S.noclip = not S.noclip
+		setNoclip(S.noclip)
+	elseif input.KeyCode == Enum.KeyCode.R and S.rQuick then
+		X.quick()
+	end
+end)
+
+local function hookDeath(char)
+	local hum = char:WaitForChild("Humanoid", 10)
+	if not hum then return end
+	hum.Died:Connect(function()
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if r then lastDeathCF = r.CFrame end
+	end)
+end
+
+local function setupChar(char)
+	camera = workspace.CurrentCamera
+	flyBV, flyBG, safePos = nil, nil, nil
+	X.lastPos, X.speeding, X.dodging, X.hold = nil, false, false, false
+	task.spawn(hookDeath, char)
+	local root = char:WaitForChild("HumanoidRootPart", 10)
+	if not root then return end
+	if lastDeathCF and (pendingRevive or S.respawnAtDeath) then
+		task.wait(0.15)
+		char:PivotTo(lastDeathCF + Vector3.new(0, 3, 0))
+		X.lastPos = nil
+		if pendingRevive then notify("Öldüğün yerde yeniden doğdun", "ok") end
+		pendingRevive = false
+	end
+	if S.flyOn then ensureFly() end
+end
+player.CharacterAdded:Connect(setupChar)
+if player.Character then task.spawn(hookDeath, player.Character) end
+
+setBgImage()
+notify(PANEL_NAME .. " yüklendi  •  K ile aç/kapat", "ok")
+addLog("panel", PANEL_NAME .. " yüklendi")
